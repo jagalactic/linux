@@ -64,6 +64,36 @@ static inline int cxl_hdm_decoder_count(u32 cap_hdr)
 	return val ? val * 2 : 1;
 }
 
+static inline int cxl_to_interleave_granularity(u16 ig)
+{
+	return 256 << ig;
+}
+
+static inline int cxl_to_interleave_ways(u8 eniw)
+{
+	switch (eniw) {
+	case 0 ... 4:
+		return 1 << eniw;
+	case 8 ... 10:
+		return 3 << (eniw - 8);
+	default:
+		return 0;
+	}
+}
+
+static inline int cxl_from_ways(u8 ways)
+{
+	if (is_power_of_2(ways))
+		return ilog2(ways);
+
+	return ways / 3 + 8;
+}
+
+static inline int cxl_from_granularity(u16 g)
+{
+	return ilog2(g) - 8;
+}
+
 /* CXL 2.0 8.2.8.1 Device Capabilities Array Register */
 #define CXLDEV_CAP_ARRAY_OFFSET 0x0
 #define   CXLDEV_CAP_ARRAY_CAP_ID 0
@@ -271,6 +301,7 @@ struct cxl_root_decoder {
 	struct cxl_decoder_targets *targets;
 	int next_region_id;
 	struct mutex id_lock; /* synchronizes access to next_region_id */
+	struct list_head regions;
 };
 
 #define _to_cxl_decoder(x)                                                     \
