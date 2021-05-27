@@ -3,9 +3,12 @@
 #include <linux/io-64-nonatomic-lo-hi.h>
 #include <linux/device.h>
 #include <linux/module.h>
+#include <linux/sizes.h>
 #include <linux/slab.h>
+#include <linux/uuid.h>
 #include <linux/idr.h>
 #include <region.h>
+#include <cxlmem.h>
 #include <cxl.h>
 #include "core.h"
 
@@ -18,11 +21,305 @@
  * (programming the hardware) is handled by a separate region driver.
  */
 
+struct cxl_region *to_cxl_region(struct device *dev);
+static const struct attribute_group region_interleave_group;
+
+static bool is_region_active(struct cxl_region *cxlr)
+{
+	/* TODO: Regions can't be activated yet. */
+	return false;
+}
+
+static void remove_target(struct cxl_region *cxlr, int target)
+{
+	struct cxl_memdev *cxlmd;
+
+	cxlmd = cxlr->config.targets[target];
+	if (cxlmd)
+		put_device(&cxlmd->dev);
+	cxlr->config.targets[target] = NULL;
+}
+
+static ssize_t interleave_ways_show(struct device *dev,
+				    struct device_attribute *attr, char *buf)
+{
+	struct cxl_region *cxlr = to_cxl_region(dev);
+
+	return sysfs_emit(buf, "%d\n", cxlr->config.interleave_ways);
+}
+
+static ssize_t interleave_ways_store(struct device *dev,
+				     struct device_attribute *attr,
+				     const char *buf, size_t len)
+{
+	struct cxl_region *cxlr = to_cxl_region(dev);
+	int ret, prev_iw;
+	int val;
+
+	prev_iw = cxlr->config.interleave_ways;
+	ret = kstrtoint(buf, 0, &val);
+	if (ret)
+		return ret;
+	if (ret < 0 || ret > CXL_DECODER_MAX_INTERLEAVE)
+		return -EINVAL;
+
+	cxlr->config.interleave_ways = val;
+
+	ret = sysfs_update_group(&dev->kobj, &region_interleave_group);
+	if (ret < 0)
+		goto err;
+
+	sysfs_notify(&dev->kobj, NULL, "target_interleave");
+
+	while (prev_iw > cxlr->config.interleave_ways)
+		remove_target(cxlr, --prev_iw);
+
+	return len;
+
+err:
+	cxlr->config.interleave_ways = prev_iw;
+	return ret;
+}
+static DEVICE_ATTR_RW(interleave_ways);
+
+static ssize_t interleave_granularity_show(struct device *dev,
+					   struct device_attribute *attr,
+					   char *buf)
+{
+	struct cxl_region *cxlr = to_cxl_region(dev);
+
+	return sysfs_emit(buf, "%d\n", cxlr->config.interleave_granularity);
+}
+
+static ssize_t interleave_granularity_store(struct device *dev,
+					    struct device_attribute *attr,
+					    const char *buf, size_t len)
+{
+	struct cxl_region *cxlr = to_cxl_region(dev);
+	int val, ret;
+
+	ret = kstrtoint(buf, 0, &val);
+	if (ret)
+		return ret;
+	cxlr->config.interleave_granularity = val;
+
+	return len;
+}
+static DEVICE_ATTR_RW(interleave_granularity);
+
+static ssize_t offset_show(struct device *dev, struct device_attribute *attr,
+			   char *buf)
+{
+	struct cxl_decoder *cxld = to_cxl_decoder(dev->parent);
+	struct cxl_region *cxlr = to_cxl_region(dev);
+	resource_size_t offset;
+
+	if (!cxlr->res)
+		return sysfs_emit(buf, "\n");
+
+	offset = cxld->platform_res.start - cxlr->res->start;
+
+	return sysfs_emit(buf, "%pa\n", &offset);
+}
+static DEVICE_ATTR_RO(offset);
+
+static ssize_t size_show(struct device *dev, struct device_attribute *attr,
+			 char *buf)
+{
+	struct cxl_region *cxlr = to_cxl_region(dev);
+
+	return sysfs_emit(buf, "%llu\n", cxlr->config.size);
+}
+
+static ssize_t size_store(struct device *dev, struct device_attribute *attr,
+			  const char *buf, size_t len)
+{
+	struct cxl_region *cxlr = to_cxl_region(dev);
+	unsigned long long val;
+	ssize_t rc;
+
+	rc = kstrtoull(buf, 0, &val);
+	if (rc)
+		return rc;
+
+	device_lock(&cxlr->dev);
+	if (is_region_active(cxlr))
+		rc = -EBUSY;
+	else
+		cxlr->config.size = val;
+	device_unlock(&cxlr->dev);
+
+	return rc ? rc : len;
+}
+static DEVICE_ATTR_RW(size);
+
+static ssize_t uuid_show(struct device *dev, struct device_attribute *attr,
+			 char *buf)
+{
+	struct cxl_region *cxlr = to_cxl_region(dev);
+
+	return sysfs_emit(buf, "%pUb\n", &cxlr->config.uuid);
+}
+
+static ssize_t uuid_store(struct device *dev, struct device_attribute *attr,
+			  const char *buf, size_t len)
+{
+	struct cxl_region *cxlr = to_cxl_region(dev);
+	ssize_t rc;
+
+	if (len != UUID_STRING_LEN + 1)
+		return -EINVAL;
+
+	device_lock(&cxlr->dev);
+	if (is_region_active(cxlr))
+		rc = -EBUSY;
+	else
+		rc = uuid_parse(buf, &cxlr->config.uuid);
+	device_unlock(&cxlr->dev);
+
+	return rc ? rc : len;
+}
+static DEVICE_ATTR_RW(uuid);
+
+static struct attribute *region_attrs[] = {
+	&dev_attr_interleave_ways.attr,
+	&dev_attr_interleave_granularity.attr,
+	&dev_attr_offset.attr,
+	&dev_attr_size.attr,
+	&dev_attr_uuid.attr,
+	NULL,
+};
+
+static const struct attribute_group region_group = {
+	.attrs = region_attrs,
+};
+
+static size_t show_targetN(struct cxl_region *cxlr, char *buf, int n)
+{
+	int ret;
+
+	device_lock(&cxlr->dev);
+	if (!cxlr->config.targets[n])
+		ret = sysfs_emit(buf, "\n");
+	else
+		ret = sysfs_emit(buf, "%s\n",
+				 dev_name(&cxlr->config.targets[n]->dev));
+	device_unlock(&cxlr->dev);
+
+	return ret;
+}
+
+static size_t set_targetN(struct cxl_region *cxlr, const char *buf, int n,
+			  size_t len)
+{
+	struct device *memdev_dev;
+	struct cxl_memdev *cxlmd;
+
+	device_lock(&cxlr->dev);
+
+	if (len == 1 || cxlr->config.targets[n])
+		remove_target(cxlr, n);
+
+	/* Remove target special case */
+	if (len == 1) {
+		device_unlock(&cxlr->dev);
+		return len;
+	}
+
+	memdev_dev = bus_find_device_by_name(&cxl_bus_type, NULL, buf);
+	if (!memdev_dev) {
+		device_unlock(&cxlr->dev);
+		return -ENOENT;
+	}
+
+	/* reference to memdev held until target is unset or region goes away */
+
+	cxlmd = to_cxl_memdev(memdev_dev);
+	cxlr->config.targets[n] = cxlmd;
+
+	device_unlock(&cxlr->dev);
+
+	return len;
+}
+
+#define TARGET_ATTR_RW(n)                                                      \
+	static ssize_t target##n##_show(                                       \
+		struct device *dev, struct device_attribute *attr, char *buf)  \
+	{                                                                      \
+		return show_targetN(to_cxl_region(dev), buf, (n));             \
+	}                                                                      \
+	static ssize_t target##n##_store(struct device *dev,                   \
+					 struct device_attribute *attr,        \
+					 const char *buf, size_t len)          \
+	{                                                                      \
+		return set_targetN(to_cxl_region(dev), buf, (n), len);         \
+	}                                                                      \
+	static DEVICE_ATTR_RW(target##n)
+
+TARGET_ATTR_RW(0);
+TARGET_ATTR_RW(1);
+TARGET_ATTR_RW(2);
+TARGET_ATTR_RW(3);
+TARGET_ATTR_RW(4);
+TARGET_ATTR_RW(5);
+TARGET_ATTR_RW(6);
+TARGET_ATTR_RW(7);
+TARGET_ATTR_RW(8);
+TARGET_ATTR_RW(9);
+TARGET_ATTR_RW(10);
+TARGET_ATTR_RW(11);
+TARGET_ATTR_RW(12);
+TARGET_ATTR_RW(13);
+TARGET_ATTR_RW(14);
+TARGET_ATTR_RW(15);
+
+static struct attribute *interleave_attrs[] = {
+	&dev_attr_target0.attr,
+	&dev_attr_target1.attr,
+	&dev_attr_target2.attr,
+	&dev_attr_target3.attr,
+	&dev_attr_target4.attr,
+	&dev_attr_target5.attr,
+	&dev_attr_target6.attr,
+	&dev_attr_target7.attr,
+	&dev_attr_target8.attr,
+	&dev_attr_target9.attr,
+	&dev_attr_target10.attr,
+	&dev_attr_target11.attr,
+	&dev_attr_target12.attr,
+	&dev_attr_target13.attr,
+	&dev_attr_target14.attr,
+	&dev_attr_target15.attr,
+	NULL,
+};
+
+static umode_t visible_targets(struct kobject *kobj, struct attribute *a, int n)
+{
+	struct device *dev = container_of(kobj, struct device, kobj);
+	struct cxl_region *cxlr = to_cxl_region(dev);
+
+	if (n < cxlr->config.interleave_ways)
+		return a->mode;
+	return 0;
+}
+
+static const struct attribute_group region_interleave_group = {
+	.attrs = interleave_attrs,
+	.is_visible = visible_targets,
+};
+
+static const struct attribute_group *region_groups[] = {
+	&region_group,
+	&region_interleave_group,
+	NULL,
+};
+
 static void cxl_region_release(struct device *dev);
 
 static const struct device_type cxl_region_type = {
 	.name = "cxl_region",
 	.release = cxl_region_release,
+	.groups = region_groups
 };
 
 static ssize_t create_region_show(struct device *dev,
@@ -108,8 +405,11 @@ static void cxl_region_release(struct device *dev)
 {
 	struct cxl_decoder *cxld = to_cxl_decoder(dev->parent);
 	struct cxl_region *cxlr = to_cxl_region(dev);
+	int i;
 
 	ida_free(&cxld->region_ida, cxlr->id);
+	for (i = 0; i < cxlr->config.interleave_ways; i++)
+		remove_target(cxlr, i);
 	kfree(cxlr);
 }
 

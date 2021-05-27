@@ -187,3 +187,43 @@ Description:
 		region driver before being deleted. The attributes expects a
 		region in the form "regionX.Y:Z". The region's name, allocated
 		by reading create_region, will also be released.
+
+What:		/sys/bus/cxl/devices/decoderX.Y/regionX.Y:Z/offset
+Date:		August, 2021
+KernelVersion:	v5.18
+Contact:	linux-cxl@vger.kernel.org
+Description:
+		(RO) A region resides within an address space that is claimed by
+		a decoder. Region space allocation is handled by the driver, but
+		the offset may be read by userspace tooling in order to
+		determine fragmentation, and available size for new regions.
+
+What:
+/sys/bus/cxl/devices/decoderX.Y/regionX.Y:Z/{interleave,size,uuid,target[0-15]}
+Date:		August, 2021
+KernelVersion:	v5.18
+Contact:	linux-cxl@vger.kernel.org
+Description:
+		(RW) Configuring regions requires a minimal set of parameters in
+		order for the subsequent bind operation to succeed. The
+		following parameters are defined:
+
+		==	========================================================
+		interleave_granularity Mandatory. Number of consecutive bytes
+			each device in the interleave set will claim. The
+			possible interleave granularity values are determined by
+			the CXL spec and the participating devices.
+		interleave_ways Mandatory. Number of devices participating in the
+			region. Each device will provide 1/interleave of storage
+			for the region.
+		size	Manadatory. Phsyical address space the region will
+			consume.
+		target  Mandatory. Memory devices are the backing storage for a
+			region. There will be N targets based on the number of
+			interleave ways that the top level decoder is configured
+			for. Each target must be set with a memdev device ie.
+			'mem1'. This attribute only becomes available after
+			setting the 'interleave' attribute.
+		uuid	Optional. A unique identifier for the region. If none is
+			selected, the kernel will create one.
+		==	========================================================
