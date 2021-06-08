@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /* Copyright(c) 2020 Intel Corporation. All rights reserved. */
 #include <linux/io-64-nonatomic-lo-hi.h>
+#include <linux/memregion.h>
 #include <linux/workqueue.h>
 #include <linux/genalloc.h>
 #include <linux/device.h>
@@ -11,6 +12,7 @@
 #include <linux/idr.h>
 #include <cxlmem.h>
 #include <cxlpci.h>
+#include <region.h>
 #include <cxl.h>
 #include "core.h"
 
@@ -337,6 +339,8 @@ static struct attribute_group cxl_decoder_base_attribute_group = {
 };
 
 static struct attribute *cxl_decoder_root_attrs[] = {
+	&dev_attr_create_pmem_region.attr,
+	&dev_attr_delete_region.attr,
 	&dev_attr_cap_pmem.attr,
 	&dev_attr_cap_ram.attr,
 	&dev_attr_cap_type2.attr,
@@ -395,6 +399,8 @@ static void cxl_decoder_release(struct device *dev)
 	struct cxl_decoder *cxld = to_cxl_decoder(dev);
 	struct cxl_port *port = to_cxl_port(dev->parent);
 
+	if (is_root_decoder(dev))
+		memregion_free(to_cxl_root_decoder(cxld)->next_region_id);
 	ida_free(&port->decoder_ida, cxld->id);
 	kfree(cxld);
 	put_device(&port->dev);
@@ -1435,13 +1441,21 @@ static struct cxl_decoder *cxl_decoder_alloc(struct cxl_port *port,
 	dev->parent = &port->dev;
 	dev->bus = &cxl_bus_type;
 	if (is_cxl_root(port)) {
+		struct cxl_root_decoder *cxlrd = to_cxl_root_decoder(cxld);
+
 		cxld->dev.type = &cxl_decoder_root_type;
-		to_cxl_root_decoder(cxld)->res = (struct resource) {
+		mutex_init(&cxlrd->id_lock);
+		rc = memregion_alloc(GFP_KERNEL);
+		if (rc < 0)
+			goto err;
+
+		cxlrd->next_region_id = rc;
+		cxld->dev.type = &cxl_decoder_endpoint_type;
+		cxlrd->res = (struct resource) {
 			.start = 0,
 			.end = -1,
 		};
 	} else if (is_cxl_endpoint(port)) {
-		cxld->dev.type = &cxl_decoder_endpoint_type;
 		to_cxl_endpoint_decoder(cxld)->range = (struct range) {
 			.start = 0,
 			.end = -1,
@@ -1618,6 +1632,17 @@ EXPORT_SYMBOL_NS_GPL(cxl_decoder_add, CXL);
 
 static void cxld_unregister(void *dev)
 {
+	struct cxl_decoder *cxld = to_cxl_decoder(dev);
+	struct cxl_endpoint_decoder *cxled;
+
+	if (!is_endpoint_decoder(&cxld->dev))
+		goto out;
+
+	mutex_lock(&cxled->cxlr->remove_lock);
+	device_release_driver(&cxled->cxlr->dev);
+	mutex_unlock(&cxled->cxlr->remove_lock);
+
+out:
 	device_unregister(dev);
 }
 
@@ -1716,6 +1741,12 @@ bool schedule_cxl_memdev_detach(struct cxl_memdev *cxlmd)
 	return queue_work(cxl_bus_wq, &cxlmd->detach_work);
 }
 EXPORT_SYMBOL_NS_GPL(schedule_cxl_memdev_detach, CXL);
+
+bool schedule_cxl_region_unregister(struct cxl_region *cxlr)
+{
+	return queue_work(cxl_bus_wq, &cxlr->detach_work);
+}
+EXPORT_SYMBOL_NS_GPL(schedule_cxl_region_unregister, CXL);
 
 /* for user tooling to ensure port disable work has completed */
 static ssize_t flush_store(struct bus_type *bus, const char *buf, size_t count)

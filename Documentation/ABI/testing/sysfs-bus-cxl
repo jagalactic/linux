@@ -174,3 +174,26 @@ Description:
 		Provide a knob to set/get whether the desired media is volatile
 		or persistent. This applies only to decoders of devtype
 		"cxl_decoder_endpoint",
+
+What:		/sys/bus/cxl/devices/decoderX.Y/create_pmem_region
+Date:		January, 2022
+KernelVersion:	v5.19
+Contact:	linux-cxl@vger.kernel.org
+Description:
+		Write an integer value to instantiate a new region to be named
+		regionZ within the decode range bounded by decoderX.Y. Where X,
+		Y, and Z are unsigned integers, and where decoderX.Y exists in
+		the CXL sysfs topology. The value written must match the current
+		value returned from reading this attribute. This behavior lets
+		the kernel arbitrate racing attempts to create a region. The
+		thread that fails to write loops and tries the next value.
+		Regions must subsequently configured and bound to a region
+		driver before they can be used.
+
+What:		/sys/bus/cxl/devices/decoderX.Y/delete_region
+Date:		January, 2022
+KernelVersion:	v5.19
+Contact:	linux-cxl@vger.kernel.org
+Description:
+		Deletes the named region. The attribute expects a region number
+		as an integer.

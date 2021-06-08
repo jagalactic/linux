@@ -233,6 +233,7 @@ struct cxl_decoder {
  * @skip: The skip count as specified in the CXL specification.
  * @res_lock: Synchronize device's resource usage
  * @volatil: Configuration param. Decoder target is non-persistent mem
+ * @cxlr: Region this decoder belongs to.
  */
 struct cxl_endpoint_decoder {
 	struct cxl_decoder base;
@@ -241,6 +242,7 @@ struct cxl_endpoint_decoder {
 	u64 skip;
 	struct mutex res_lock; /* sync access to decoder's resource */
 	bool volatil;
+	struct cxl_region *cxlr;
 };
 
 /**
@@ -441,6 +443,8 @@ struct cxl_hdm *devm_cxl_setup_hdm(struct cxl_port *port);
 int devm_cxl_enumerate_decoders(struct cxl_hdm *cxlhdm);
 int devm_cxl_add_passthrough_decoder(struct cxl_port *port);
 
+bool is_cxl_region(struct device *dev);
+
 extern struct bus_type cxl_bus_type;
 
 struct cxl_driver {
@@ -495,6 +499,7 @@ enum cxl_lock_class {
 	CXL_ANON_LOCK,
 	CXL_NVDIMM_LOCK,
 	CXL_NVDIMM_BRIDGE_LOCK,
+	CXL_REGION_LOCK,
 	CXL_PORT_LOCK,
 	/*
 	 * Be careful to add new lock classes here, CXL_PORT_LOCK is
@@ -523,6 +528,8 @@ static inline void cxl_nested_lock(struct device *dev)
 		mutex_lock_nested(&dev->lockdep_mutex, CXL_NVDIMM_BRIDGE_LOCK);
 	else if (is_cxl_nvdimm(dev))
 		mutex_lock_nested(&dev->lockdep_mutex, CXL_NVDIMM_LOCK);
+	else if (is_cxl_region(dev))
+		mutex_lock_nested(&dev->lockdep_mutex, CXL_REGION_LOCK);
 	else
 		mutex_lock_nested(&dev->lockdep_mutex, CXL_ANON_LOCK);
 }

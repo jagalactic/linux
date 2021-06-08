@@ -99,4 +99,9 @@ config CXL_PORT
 	default CXL_BUS
 	select DEVICE_PRIVATE
 
+config CXL_REGION
+	tristate
+	default CXL_BUS
+	select MEMREGION
+
 endif
