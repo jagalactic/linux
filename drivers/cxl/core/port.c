@@ -215,6 +215,8 @@ static struct attribute_group cxl_decoder_base_attribute_group = {
 };
 
 static struct attribute *cxl_decoder_root_attrs[] = {
+	&dev_attr_create_region.attr,
+	&dev_attr_delete_region.attr,
 	&dev_attr_cap_pmem.attr,
 	&dev_attr_cap_ram.attr,
 	&dev_attr_cap_type2.attr,
@@ -267,10 +269,22 @@ static const struct attribute_group *cxl_decoder_endpoint_attribute_groups[] = {
 	NULL,
 };
 
+static int delete_region(struct device *dev, void *arg)
+{
+	struct cxl_decoder *cxld = to_cxl_decoder(dev->parent);
+
+	return cxl_delete_region(cxld, dev_name(dev));
+}
+
 static void cxl_decoder_release(struct device *dev)
 {
 	struct cxl_decoder *cxld = to_cxl_decoder(dev);
 	struct cxl_port *port = to_cxl_port(dev->parent);
+
+	device_for_each_child(&cxld->dev, cxld, delete_region);
+
+	dev_WARN_ONCE(dev, !ida_is_empty(&cxld->region_ida),
+		      "Lost track of a region");
 
 	ida_free(&port->decoder_ida, cxld->id);
 	kfree(cxld);
@@ -1193,6 +1207,8 @@ static struct cxl_decoder *cxl_decoder_alloc(struct cxl_port *port,
 	cxld->interleave_granularity = PAGE_SIZE;
 	cxld->target_type = CXL_DECODER_EXPANDER;
 	cxld->platform_res = (struct resource)DEFINE_RES_MEM(0, 0);
+
+	ida_init(&cxld->region_ida);
 
 	return cxld;
 err:

@@ -221,6 +221,7 @@ enum cxl_decoder_type {
  * @target_type: accelerator vs expander (type2 vs type3) selector
  * @flags: memory type capabilities and locking
  * @target_lock: coordinate coherent reads of the target list
+ * @region_ida: allocator for region ids.
  * @nr_targets: number of elements in @target
  * @target: active ordered target list in current decoder configuration
  */
@@ -236,6 +237,7 @@ struct cxl_decoder {
 	enum cxl_decoder_type target_type;
 	unsigned long flags;
 	seqlock_t target_lock;
+	struct ida region_ida;
 	int nr_targets;
 	struct cxl_dport *target[];
 };
@@ -322,6 +324,13 @@ struct cxl_ep {
 	struct device *ep;
 	struct list_head list;
 };
+
+bool is_cxl_region(struct device *dev);
+struct cxl_region *to_cxl_region(struct device *dev);
+struct cxl_region *cxl_alloc_region(struct cxl_decoder *cxld,
+				    int interleave_ways);
+int cxl_add_region(struct cxl_decoder *cxld, struct cxl_region *cxlr);
+int cxl_delete_region(struct cxl_decoder *cxld, const char *region);
 
 static inline bool is_cxl_root(struct cxl_port *port)
 {

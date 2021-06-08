@@ -163,3 +163,27 @@ Description:
 		memory (type-3). The 'target_type' attribute indicates the
 		current setting which may dynamically change based on what
 		memory regions are activated in this decode hierarchy.
+
+What:		/sys/bus/cxl/devices/decoderX.Y/create_region
+Date:		August, 2021
+KernelVersion:	v5.18
+Contact:	linux-cxl@vger.kernel.org
+Description:
+		Creates a new CXL region. Writing a value of the form
+		"regionX.Y:Z" will create a new uninitialized region that will
+		be mapped by the CXL decoderX.Y. Reading from this node will
+		return a newly allocated region name. In order to create a
+		region (writing) you must use a value returned from reading the
+		node. Regions must be created for root decoders, and must
+		subsequently configured and bound to a region driver before they
+		can be used.
+
+What:		/sys/bus/cxl/devices/decoderX.Y/delete_region
+Date:		August, 2021
+KernelVersion:	v5.18
+Contact:	linux-cxl@vger.kernel.org
+Description:
+		Deletes the named region. A region must be unbound from the
+		region driver before being deleted. The attributes expects a
+		region in the form "regionX.Y:Z". The region's name, allocated
+		by reading create_region, will also be released.
