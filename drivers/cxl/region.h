@@ -13,6 +13,7 @@
  * @id: This regions id. Id is globally unique across all regions.
  * @list: Node in decoder's region list.
  * @res: Resource this region carves out of the platform decode range.
+ * @active: If the region has been activated.
  * @config: HDM decoder program config
  * @config.size: Size of the region determined from LSA or userspace.
  * @config.uuid: The UUID for this region.
@@ -25,6 +26,7 @@ struct cxl_region {
 	int id;
 	struct list_head list;
 	struct resource *res;
+	bool active;
 
 	struct {
 		u64 size;
@@ -34,5 +36,7 @@ struct cxl_region {
 		struct cxl_memdev *targets[CXL_DECODER_MAX_INTERLEAVE];
 	} config;
 };
+
+bool is_cxl_region_configured(const struct cxl_region *cxlr);
 
 #endif

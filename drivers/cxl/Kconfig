@@ -98,4 +98,8 @@ config CXL_PORT
 	default CXL_BUS
 	tristate
 
+config CXL_REGION
+	default CXL_PORT
+	tristate
+
 endif

@@ -81,6 +81,31 @@ static inline int cxl_to_interleave_ways(u8 eniw)
 	}
 }
 
+static inline bool cxl_is_interleave_ways_valid(int iw)
+{
+	switch (iw) {
+		case 0 ... 4:
+		case 6:
+		case 8:
+		case 12:
+		case 16:
+			return true;
+		default:
+			return false;
+	}
+
+	unreachable();
+}
+
+static inline bool cxl_is_interleave_granularity_valid(int ig)
+{
+	if (!is_power_of_2(ig))
+		return false;
+
+	/* 16K is the max */
+	return ((ig >> 15) == 0);
+}
+
 /* CXL 2.0 8.2.8.1 Device Capabilities Array Register */
 #define CXLDEV_CAP_ARRAY_OFFSET 0x0
 #define   CXLDEV_CAP_ARRAY_CAP_ID 0
@@ -198,6 +223,10 @@ void __iomem *devm_cxl_iomap_block(struct device *dev, resource_size_t addr,
 #define CXL_DECODER_F_LOCK  BIT(4)
 #define CXL_DECODER_F_ENABLE    BIT(5)
 #define CXL_DECODER_F_MASK  GENMASK(5, 0)
+
+#define cxl_is_pmem_t3(flags)                                                  \
+	(((flags) & (CXL_DECODER_F_TYPE3 | CXL_DECODER_F_PMEM)) ==             \
+	 (CXL_DECODER_F_TYPE3 | CXL_DECODER_F_PMEM))
 
 enum cxl_decoder_type {
        CXL_DECODER_ACCELERATOR = 2,
@@ -357,6 +386,7 @@ struct cxl_dport *devm_cxl_add_dport(struct cxl_port *port,
 				     resource_size_t component_reg_phys);
 struct cxl_dport *cxl_find_dport_by_dev(struct cxl_port *port,
 					const struct device *dev);
+struct cxl_port *ep_find_cxl_port(struct cxl_memdev *cxlmd, unsigned int depth);
 
 struct cxl_decoder *to_cxl_decoder(struct device *dev);
 bool is_root_decoder(struct device *dev);
@@ -404,6 +434,7 @@ void cxl_driver_unregister(struct cxl_driver *cxl_drv);
 #define CXL_DEVICE_PORT			3
 #define CXL_DEVICE_ROOT			4
 #define CXL_DEVICE_MEMORY_EXPANDER	5
+#define CXL_DEVICE_REGION		6
 
 #define MODULE_ALIAS_CXL(type) MODULE_ALIAS("cxl:t" __stringify(type) "*")
 #define CXL_MODALIAS_FMT "cxl:t%d"

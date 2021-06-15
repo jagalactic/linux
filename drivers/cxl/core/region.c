@@ -12,6 +12,8 @@
 #include <cxl.h>
 #include "core.h"
 
+#include "core.h"
+
 /**
  * DOC: cxl core region
  *
@@ -26,9 +28,26 @@ static const struct attribute_group region_interleave_group;
 
 static bool is_region_active(struct cxl_region *cxlr)
 {
-	/* TODO: Regions can't be activated yet. */
-	return false;
+	return cxlr->active;
 }
+
+/*
+ * Most sanity checking is left up to region binding. This does the most basic
+ * check to determine whether or not the core should try probing the driver.
+ */
+bool is_cxl_region_configured(const struct cxl_region *cxlr)
+{
+	/* zero sized regions aren't a thing. */
+	if (cxlr->config.size <= 0)
+		return false;
+
+	/* all regions have at least 1 target */
+	if (!cxlr->config.targets[0])
+		return false;
+
+	return true;
+}
+EXPORT_SYMBOL_GPL(is_cxl_region_configured);
 
 static void remove_target(struct cxl_region *cxlr, int target)
 {
@@ -316,7 +335,7 @@ static const struct attribute_group *region_groups[] = {
 
 static void cxl_region_release(struct device *dev);
 
-static const struct device_type cxl_region_type = {
+const struct device_type cxl_region_type = {
 	.name = "cxl_region",
 	.release = cxl_region_release,
 	.groups = region_groups

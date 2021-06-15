@@ -9,6 +9,7 @@
 #include <linux/idr.h>
 #include <cxlmem.h>
 #include <cxlpci.h>
+#include <region.h>
 #include <cxl.h>
 #include "core.h"
 
@@ -49,6 +50,8 @@ static int cxl_device_id(struct device *dev)
 	}
 	if (dev->type == &cxl_memdev_type)
 		return CXL_DEVICE_MEMORY_EXPANDER;
+	if (dev->type == &cxl_region_type)
+		return CXL_DEVICE_REGION;
 	return 0;
 }
 
@@ -1425,13 +1428,23 @@ static int cxl_bus_match(struct device *dev, struct device_driver *drv)
 
 static int cxl_bus_probe(struct device *dev)
 {
-	int rc;
+	int id = cxl_device_id(dev);
+	int rc = -ENODEV;
 
 	cxl_nested_lock(dev);
-	rc = to_cxl_drv(dev->driver)->probe(dev);
+	if (id == CXL_DEVICE_REGION) {
+		/* Regions cannot bind until parameters are set */
+		struct cxl_region *cxlr = to_cxl_region(dev);
+
+		if (is_cxl_region_configured(cxlr))
+			rc = to_cxl_drv(dev->driver)->probe(dev);
+	} else {
+		rc = to_cxl_drv(dev->driver)->probe(dev);
+	}
 	cxl_nested_unlock(dev);
 
 	dev_dbg(dev, "probe: %d\n", rc);
+
 	return rc;
 }
 
