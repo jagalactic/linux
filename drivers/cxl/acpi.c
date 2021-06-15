@@ -126,10 +126,8 @@ static void cxl_add_cfmws_decoders(struct device *dev,
 
 		cxld->flags = cfmws_to_decoder_flags(cfmws->restrictions);
 		cxld->target_type = CXL_DECODER_EXPANDER;
-		cxld->range = (struct range) {
-			.start = cfmws->base_hpa,
-			.end = cfmws->base_hpa + cfmws->window_size - 1,
-		};
+		cxld->platform_res = (struct resource)DEFINE_RES_MEM(cfmws->base_hpa,
+								     cfmws->window_size);
 		cxld->interleave_ways = CFMWS_INTERLEAVE_WAYS(cfmws);
 		cxld->interleave_granularity =
 			CFMWS_INTERLEAVE_GRANULARITY(cfmws);
@@ -339,10 +337,7 @@ static int add_host_bridge_uport(struct device *match, void *arg)
 	cxld->interleave_ways = 1;
 	cxld->interleave_granularity = PAGE_SIZE;
 	cxld->target_type = CXL_DECODER_EXPANDER;
-	cxld->range = (struct range) {
-		.start = 0,
-		.end = -1,
-	};
+	cxld->platform_res = (struct resource)DEFINE_RES_MEM(0, 0);
 
 	device_lock(&port->dev);
 	dport = list_first_entry(&port->dports, typeof(*dport), list);
