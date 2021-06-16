@@ -251,6 +251,7 @@ enum cxl_decoder_type {
  * @flags: memory type capabilities and locking
  * @target_lock: coordinate coherent reads of the target list
  * @region_ida: allocator for region ids.
+ * @address_space: Used/free address space for regions.
  * @nr_targets: number of elements in @target
  * @target: active ordered target list in current decoder configuration
  */
@@ -267,6 +268,7 @@ struct cxl_decoder {
 	unsigned long flags;
 	seqlock_t target_lock;
 	struct ida region_ida;
+	struct gen_pool *address_space;
 	int nr_targets;
 	struct cxl_dport *target[];
 };
