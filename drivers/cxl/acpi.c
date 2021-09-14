@@ -499,3 +499,4 @@ static struct platform_driver cxl_acpi_driver = {
 module_platform_driver(cxl_acpi_driver);
 MODULE_LICENSE("GPL v2");
 MODULE_IMPORT_NS(CXL);
+MODULE_SOFTDEP("pre: cxl_port");
