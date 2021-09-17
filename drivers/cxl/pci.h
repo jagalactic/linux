@@ -31,4 +31,8 @@ enum cxl_regloc_type {
 #define CXL_REGLOC_RBI_MASK GENMASK(15, 8)
 #define CXL_REGLOC_ADDR_MASK GENMASK(31, 16)
 
+#define cxl_reg_block(pdev, map)                                               \
+	((resource_size_t)(pci_resource_start(pdev, (map)->barno) +            \
+			   (map)->block_offset))
+
 #endif /* __CXL_PCI_H__ */
