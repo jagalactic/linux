@@ -313,6 +313,8 @@ struct cxl_port *to_cxl_port(struct device *dev);
 struct cxl_port *devm_cxl_add_port(struct device *uport,
 				   resource_size_t component_reg_phys,
 				   struct cxl_port *parent_port);
+void devm_cxl_remove_port(struct cxl_port *port);
+void cxl_scan_ports(struct cxl_dport *root_port);
 
 int cxl_add_dport(struct cxl_port *port, struct device *dport, int port_id,
 		  resource_size_t component_reg_phys, bool root_port);

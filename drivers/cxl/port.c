@@ -187,7 +187,7 @@ static int enumerate_hdm_decoders(struct cxl_port *port,
 		if (rc)
 			put_device(&cxld->dev);
 		else
-			rc = cxl_decoder_autoremove(port->uport->parent, cxld);
+			rc = cxl_decoder_autoremove(&port->dev, cxld);
 		if (rc)
 			dev_err(&port->dev, "Failed to add decoder\n");
 	}

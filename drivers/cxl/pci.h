@@ -15,6 +15,8 @@
 
 /* 8.1.3: PCIe DVSEC for CXL Device */
 #define CXL_DVSEC_PCIE_DEVICE					0
+#define   DVSEC_PCIE_DEVICE_CONTROL_OFFSET			0xC
+#define     DVSEC_PCIE_DEVICE_MEM_ENABLE			BIT(2)
 
 /* 8.1.4: Non-CXL Function Map DVSEC */
 #define CXL_DVSEC_FUNCTION_MAP					2
@@ -56,5 +58,9 @@ enum cxl_regloc_type {
 #define cxl_reg_block(pdev, map)                                               \
 	((resource_size_t)(pci_resource_start(pdev, (map)->barno) +            \
 			   (map)->block_offset))
+
+bool is_cxl_switch_usp(struct device *dev);
+bool is_cxl_switch_dsp(struct device *dev);
+bool is_cxl_mem_enabled(struct pci_dev *pdev);
 
 #endif /* __CXL_PCI_H__ */

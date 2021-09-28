@@ -8,6 +8,7 @@
 #include <linux/idr.h>
 #include <cxlmem.h>
 #include <cxl.h>
+#include <pci.h>
 #include "core.h"
 
 /**
@@ -500,6 +501,150 @@ err:
 	return ERR_PTR(rc);
 }
 EXPORT_SYMBOL_GPL(devm_cxl_add_port);
+
+void devm_cxl_remove_port(struct cxl_port *port)
+{
+	down_read(&root_host_sem);
+	if (cxl_root_host) {
+		devm_release_action(cxl_root_host, cxl_unlink_uport, port);
+		devm_release_action(cxl_root_host, unregister_port, port);
+	}
+	up_read(&root_host_sem);
+}
+EXPORT_SYMBOL_GPL(devm_cxl_remove_port);
+
+static int match_port(struct device *dev, const void *data)
+{
+	struct pci_dev *pdev = (struct pci_dev *)data;
+
+	if (dev->type != &cxl_port_type)
+		return 0;
+
+	return to_cxl_port(dev)->uport == &pdev->dev;
+}
+
+static struct cxl_port *find_cxl_port(struct pci_dev *usp)
+{
+	struct device *port_dev;
+
+	if (!pci_is_pcie(usp) || pci_pcie_type(usp) != PCI_EXP_TYPE_UPSTREAM)
+		return NULL;
+
+	port_dev = bus_find_device(&cxl_bus_type, NULL, usp, match_port);
+	if (port_dev)
+		return to_cxl_port(port_dev);
+
+	return NULL;
+}
+
+static int add_upstream_port(struct device *host, struct pci_dev *pdev)
+{
+	struct device *dev = &pdev->dev;
+	struct cxl_port *parent_port;
+	struct cxl_register_map map;
+	struct cxl_port *port;
+	int rc;
+
+	/*
+	 * Upstream ports must be connected to a downstream port or root port.
+	 * That downstream or root port must have a parent.
+	 */
+	if (!pdev->dev.parent->parent)
+		return -ENXIO;
+
+	/* A port is useless if there are no component registers */
+	rc = cxl_find_regblock(pdev, CXL_REGLOC_RBI_COMPONENT, &map);
+	if (rc)
+		return rc;
+
+	parent_port = find_cxl_port(to_pci_dev(pdev->dev.parent->parent));
+	if (!parent_port)
+		return -ENODEV;
+
+	port = devm_cxl_add_port(dev, cxl_reg_block(pdev, &map), parent_port);
+	put_device(&parent_port->dev);
+	if (IS_ERR(port))
+		dev_err(dev, "Failed to add upstream port %ld\n",
+			PTR_ERR(port));
+	else
+		dev_dbg(dev, "Added CXL port\n");
+
+	return rc;
+}
+
+static int add_downstream_port(struct pci_dev *pdev)
+{
+	resource_size_t creg = CXL_RESOURCE_NONE;
+	struct device *dev = &pdev->dev;
+	struct cxl_port *parent_port;
+	struct cxl_register_map map;
+	u32 lnkcap, port_num;
+	int rc;
+
+	/*
+	 * Ports are to be scanned from top down. Therefore, the upstream port
+	 * must already exist.
+	 */
+	parent_port = find_cxl_port(to_pci_dev(pdev->dev.parent));
+	if (!parent_port)
+		return -ENODEV;
+
+	/*
+	 * The spec mandates component registers are present but the
+	 * driver does not.
+	 */
+	rc = cxl_find_regblock(pdev, CXL_REGLOC_RBI_COMPONENT, &map);
+	if (!rc)
+		creg = cxl_reg_block(pdev, &map);
+
+	if (pci_read_config_dword(pdev, pci_pcie_cap(pdev) + PCI_EXP_LNKCAP,
+				  &lnkcap) != PCIBIOS_SUCCESSFUL)
+		return 1;
+	port_num = FIELD_GET(PCI_EXP_LNKCAP_PN, lnkcap);
+
+	rc = cxl_add_dport(parent_port, dev, port_num, creg, false);
+	put_device(&parent_port->dev);
+	if (rc)
+		dev_err(dev, "Failed to add downstream port to %s\n",
+			dev_name(&parent_port->dev));
+	else
+		dev_dbg(dev, "Added downstream port to %s\n",
+			dev_name(&parent_port->dev));
+
+	return rc;
+}
+
+static int match_add_ports(struct pci_dev *pdev, void *data)
+{
+	struct device *dev = &pdev->dev;
+	struct device *host = data;
+	int rc;
+
+	/* This port has already been added... */
+	if (find_cxl_port(pdev))
+		return 0;
+
+	if (is_cxl_switch_usp((dev)))
+		rc = add_upstream_port(host, pdev);
+
+	if (is_cxl_switch_dsp((dev)))
+		rc = add_downstream_port(pdev);
+
+	return rc;
+}
+
+/**
+ * cxl_scan_ports() - Adds all ports for the subtree beginning with @dport
+ * @dport: Beginning node of the CXL topology
+ */
+void cxl_scan_ports(struct cxl_dport *dport)
+{
+	struct device *d = dport->dport;
+	struct pci_dev *pdev = to_pci_dev(d);
+
+	pci_walk_bus(pdev->bus, match_add_ports, &dport->port->dev);
+}
+EXPORT_SYMBOL_GPL(cxl_scan_ports);
 
 static struct cxl_dport *find_dport(struct cxl_port *port, int id)
 {
