@@ -279,12 +279,14 @@ static int add_host_bridge_uport(struct device *match, void *arg)
 	struct cxl_port *root_port = arg;
 	struct device *host = root_port->dev.parent;
 	struct acpi_device *bridge = to_cxl_host_bridge(host, match);
+	struct cxl_component_reg_map map;
 	struct acpi_pci_root *pci_root;
 	struct cxl_walk_context ctx;
 	int single_port_map[1], rc;
 	struct cxl_decoder *cxld;
 	struct cxl_dport *dport;
 	struct cxl_port *port;
+	void __iomem *crb;
 
 	if (!bridge)
 		return 0;
@@ -316,10 +318,31 @@ static int add_host_bridge_uport(struct device *match, void *arg)
 		return -ENODEV;
 	if (ctx.error)
 		return ctx.error;
+	/*
+	 * If the host bridge has more than 1 root port, it must have registers
+	 * controlling the HDM decoders. Those will be enumerated by the port
+	 * driver.
+	 */
 	if (ctx.count > 1)
 		return 0;
 
-	/* TODO: Scan CHBCR for HDM Decoder resources */
+	/*
+	 * If the single ported host bridge has a component register block,
+	 * simply let the port driver handle the decoder enumeration.
+	 *
+	 * Host bridge component registers live in the system's physical address
+	 * space.
+	 */
+	crb = ioremap(dport->component_reg_phys, CXL_COMPONENT_REG_BLOCK_SIZE);
+	if (crb) {
+		cxl_probe_component_regs(&root_port->dev, crb, &map);
+		iounmap(crb);
+		if (map.hdm_decoder.valid) {
+			dev_dbg(host,
+				"Found single port host bridge with component registers\n");
+			return 0;
+		}
+	}
 
 	/*
 	 * Per the CXL specification (8.2.5.12 CXL HDM Decoder Capability
