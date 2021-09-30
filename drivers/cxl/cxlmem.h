@@ -36,6 +36,7 @@
  * @cxlm: pointer to the parent device driver data
  * @id: id number of this memdev instance.
  * @component_reg_phys: register base of component registers
+ * @root_port: Hostbridge's root port connected to this endpoint
  */
 struct cxl_memdev {
 	struct device dev;
@@ -43,6 +44,7 @@ struct cxl_memdev {
 	struct cxl_mem *cxlm;
 	int id;
 	resource_size_t component_reg_phys;
+	struct cxl_dport *root_port;
 };
 
 static inline struct cxl_memdev *to_cxl_memdev(struct device *dev)

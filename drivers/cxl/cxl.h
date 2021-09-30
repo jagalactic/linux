@@ -319,6 +319,8 @@ void cxl_scan_ports(struct cxl_dport *root_port);
 int cxl_add_dport(struct cxl_port *port, struct device *dport, int port_id,
 		  resource_size_t component_reg_phys, bool root_port);
 struct cxl_dport *cxl_get_root_dport(struct device *dev);
+struct cxl_dport *cxl_find_dport_by_dev(struct cxl_port *port,
+					struct device *dev);
 
 struct cxl_decoder *cxl_find_cfmws(resource_size_t base, resource_size_t size);
 bool is_cxl_decoder(struct device *dev);
@@ -356,6 +358,7 @@ void cxl_driver_unregister(struct cxl_driver *cxl_drv);
 #define CXL_DEVICE_NVDIMM_BRIDGE	1
 #define CXL_DEVICE_NVDIMM		2
 #define CXL_DEVICE_PORT			3
+#define CXL_DEVICE_MEMORY_EXPANDER	4
 
 #define MODULE_ALIAS_CXL(type) MODULE_ALIAS("cxl:t" __stringify(type) "*")
 #define CXL_MODALIAS_FMT "cxl:t%d"

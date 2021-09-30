@@ -729,6 +729,23 @@ err:
 }
 EXPORT_SYMBOL_GPL(cxl_add_dport);
 
+struct cxl_dport *cxl_find_dport_by_dev(struct cxl_port *port,
+					struct device *dev)
+{
+	struct cxl_dport *dport;
+
+	device_lock(&port->dev);
+	list_for_each_entry(dport, &port->dports, list)
+		if (dport->dport == dev) {
+			device_unlock(&port->dev);
+			return dport;
+		}
+
+	device_unlock(&port->dev);
+	return NULL;
+}
+EXPORT_SYMBOL_GPL(cxl_find_dport_by_dev);
+
 static int decoder_populate_targets(struct cxl_decoder *cxld,
 				    struct cxl_port *port, int *target_map)
 {
@@ -968,6 +985,8 @@ static int cxl_device_id(struct device *dev)
 		return CXL_DEVICE_NVDIMM;
 	if (dev->type == &cxl_port_type)
 		return CXL_DEVICE_PORT;
+	if (dev->type == &cxl_memdev_type)
+		return CXL_DEVICE_MEMORY_EXPANDER;
 	return 0;
 }
 

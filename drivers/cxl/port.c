@@ -135,7 +135,6 @@ static int enumerate_hdm_decoders(struct cxl_port *port,
 			return PTR_ERR(cxld);
 		}
 
-		cxld->decoder_res = NULL;
 		cxld->target_type = CXL_DECODER_EXPANDER;
 		cxld->interleave_ways = 1;
 		cxld->interleave_granularity = 0;
@@ -143,7 +142,6 @@ static int enumerate_hdm_decoders(struct cxl_port *port,
 		size = get_decoder_size(hdm_decoder, i);
 		if (size != 0) {
 			int temp[CXL_DECODER_MAX_INTERLEAVE];
-			struct cxl_decoder *cfmws;
 			u64 target_list, base;
 			u32 ctrl;
 			int j;
@@ -152,24 +150,10 @@ static int enumerate_hdm_decoders(struct cxl_port *port,
 			ctrl = readl(hdm_decoder + CXL_HDM_DECODER0_CTRL_OFFSET(i));
 			base = ioread64_hi_lo(hdm_decoder + CXL_HDM_DECODER0_BASE_LOW_OFFSET(i));
 
-			cfmws = cxl_find_cfmws(base, size);
-			if (!cfmws) {
-				dev_err(&port->dev,
-					"No CFMWS entry found for decoder\n");
-				put_device(&cxld->dev);
-				continue;
-			}
-
-			cxld->decoder_res =
-				__request_region(&cfmws->cfmws_res, base, size,
-						 "cxld", IORESOURCE_MEM);
-			if (!cxld->decoder_res) {
-				dev_err(&port->dev,
-					"Failed to request resource (%d)\n",
-					rc);
-				put_device(&cxld->dev);
-				continue;
-			}
+			cxld->decoder_range = (struct range){
+				.start = base,
+				.end = base + size - 1
+			};
 
 			cxld->flags = CXL_DECODER_F_EN;
 			cxld->interleave_ways = cxl_hdm_decoder_iw(ctrl);
