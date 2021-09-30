@@ -449,6 +449,14 @@ static u32 cedt_instance(struct platform_device *pdev)
 	return U32_MAX;
 }
 
+static void bus_rescan(struct work_struct *work)
+{
+	if (bus_rescan_devices(&cxl_bus_type))
+		pr_err("Failed to rescan CXL bus\n");
+}
+
+static DECLARE_WORK(deferred_bus_rescan, bus_rescan);
+
 static int cxl_acpi_probe(struct platform_device *pdev)
 {
 	int rc;
@@ -484,9 +492,19 @@ static int cxl_acpi_probe(struct platform_device *pdev)
 	if (rc)
 		goto out;
 
-	if (IS_ENABLED(CONFIG_CXL_PMEM))
+	if (IS_ENABLED(CONFIG_CXL_PMEM)) {
 		rc = device_for_each_child(&root_port->dev, root_port,
 					   add_root_nvdimm_bridge);
+		if (rc)
+			goto out;
+	}
+
+	/*
+	 * While ACPI is scanning hostbridge ports, switches and memory devices
+	 * may have been probed. Those devices will need to know whether the
+	 * hostbridge is CXL capable.
+	 */
+	schedule_work(&deferred_bus_rescan);
 
 out:
 	acpi_put_table(acpi_cedt);
