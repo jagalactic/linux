@@ -276,8 +276,8 @@ static const struct file_operations cxl_memdev_fops = {
 	.llseek = noop_llseek,
 };
 
-struct cxl_memdev *
-devm_cxl_add_memdev(struct cxl_mem *cxlm)
+struct cxl_memdev *devm_cxl_add_memdev(struct cxl_mem *cxlm,
+				       resource_size_t component_reg_phys)
 {
 	struct cxl_memdev *cxlmd;
 	struct device *dev;
@@ -298,6 +298,7 @@ devm_cxl_add_memdev(struct cxl_mem *cxlm)
 	 * needed as this is ordered with cdev_add() publishing the device.
 	 */
 	cxlmd->cxlm = cxlm;
+	cxlmd->component_reg_phys = component_reg_phys;
 
 	cdev = &cxlmd->cdev;
 	rc = cdev_device_add(cdev, dev);

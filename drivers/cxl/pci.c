@@ -421,6 +421,7 @@ static int cxl_setup_regs(struct pci_dev *pdev, enum cxl_regloc_type type,
 
 static int cxl_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 {
+	resource_size_t creg = CXL_RESOURCE_NONE;
 	struct cxl_register_map map;
 	struct cxl_memdev *cxlmd;
 	struct cxl_mem *cxlm;
@@ -465,7 +466,17 @@ static int cxl_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	if (rc)
 		return rc;
 
-	cxlmd = devm_cxl_add_memdev(cxlm);
+	/*
+	 * If the component registers can't be found, the cxl_pci driver may
+	 * still be useful for management functions so don't return an error.
+	 */
+	rc = cxl_find_regblock(pdev, CXL_REGLOC_RBI_COMPONENT, &map);
+	if (rc)
+		dev_warn(&cxlmd->dev, "No component registers (%d)\n", rc);
+	else
+		creg = cxl_reg_block(pdev, &map);
+
+	cxlmd = devm_cxl_add_memdev(cxlm, creg);
 	if (IS_ERR(cxlmd))
 		return PTR_ERR(cxlmd);
 

@@ -35,12 +35,14 @@
  * @cdev: char dev core object for ioctl operations
  * @cxlm: pointer to the parent device driver data
  * @id: id number of this memdev instance.
+ * @component_reg_phys: register base of component registers
  */
 struct cxl_memdev {
 	struct device dev;
 	struct cdev cdev;
 	struct cxl_mem *cxlm;
 	int id;
+	resource_size_t component_reg_phys;
 };
 
 static inline struct cxl_memdev *to_cxl_memdev(struct device *dev)
@@ -48,7 +50,8 @@ static inline struct cxl_memdev *to_cxl_memdev(struct device *dev)
 	return container_of(dev, struct cxl_memdev, dev);
 }
 
-struct cxl_memdev *devm_cxl_add_memdev(struct cxl_mem *cxlm);
+struct cxl_memdev *devm_cxl_add_memdev(struct cxl_mem *cxlm,
+				       resource_size_t component_reg_phys);
 
 /**
  * struct cxl_mbox_cmd - A command to be submitted to hardware.

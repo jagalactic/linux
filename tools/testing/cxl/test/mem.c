@@ -227,7 +227,12 @@ static int cxl_mock_mem_probe(struct platform_device *pdev)
 	if (rc)
 		return rc;
 
-	cxlmd = devm_cxl_add_memdev(cxlm);
+	/*
+	 * cxl_test does not emulate registers, any memdev operations that imply
+	 * component register access will be mocked at the memdev operations
+	 * interface.
+	 */
+	cxlmd = devm_cxl_add_memdev(cxlm, CXL_RESOURCE_NONE);
 	if (IS_ERR(cxlmd))
 		return PTR_ERR(cxlmd);
 
