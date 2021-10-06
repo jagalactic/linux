@@ -29,6 +29,17 @@
 
 #define region_ways(region) ((region)->config.interleave_ways)
 #define region_granularity(region) ((region)->config.interleave_granularity)
+#define region_eniw(region) (cxl_to_eniw(region_ways(region)))
+#define region_ig(region) (cxl_to_ig(region_granularity(region)))
+
+#define for_each_cxl_endpoint(ep, region, idx)                                 \
+	for (idx = 0, ep = (region)->config.targets[idx];                      \
+	     idx < region_ways(region); ep = (region)->config.targets[++idx])
+
+#define for_each_cxl_decoder_target(dport, decoder, idx)                       \
+	for (idx = 0, dport = (decoder)->target[idx];                          \
+	     idx < (decoder)->nr_targets - 1;                                  \
+	     dport = (decoder)->target[++idx])
 
 static struct cxl_decoder *rootd_from_region(struct cxl_region *cxlr)
 {
@@ -195,6 +206,30 @@ static bool qtg_match(const struct cxl_decoder *rootd,
 	return true;
 }
 
+static int get_unique_hostbridges(const struct cxl_region *cxlr,
+				  struct cxl_port **hbs)
+{
+	struct cxl_memdev *ep;
+	int i, hb_count = 0;
+
+	for_each_cxl_endpoint(ep, cxlr, i) {
+		struct cxl_port *hb = get_hostbridge(ep);
+		bool found = false;
+		int j;
+
+		BUG_ON(!hb);
+
+		for (j = 0; j < hb_count; j++) {
+			if (hbs[j] == hb)
+				found = true;
+		}
+		if (!found)
+			hbs[hb_count++] = hb;
+	}
+
+	return hb_count;
+}
+
 /**
  * region_xhb_config_valid() - determine cross host bridge validity
  * @cxlr: The region being programmed
@@ -208,7 +243,59 @@ static bool qtg_match(const struct cxl_decoder *rootd,
 static bool region_xhb_config_valid(const struct cxl_region *cxlr,
 				    const struct cxl_decoder *rootd)
 {
-	/* TODO: */
+	const int rootd_eniw = cxl_to_eniw(rootd->interleave_ways);
+	const int rootd_ig = cxl_to_ig(rootd->interleave_granularity);
+	const int cxlr_ig = region_ig(cxlr);
+	const int cxlr_iw = region_ways(cxlr);
+	struct cxl_port *hbs[CXL_DECODER_MAX_INTERLEAVE];
+	struct cxl_dport *target;
+	int i;
+
+	i = get_unique_hostbridges(cxlr, hbs);
+	if (dev_WARN_ONCE(&cxlr->dev, i == 0, "Cannot find a valid host bridge\n"))
+		return false;
+
+	/* Are all devices in this region on the same CXL host bridge */
+	if (i == 1)
+		return true;
+
+	/* CFMWS.HBIG >= Device.Label.IG */
+	if (rootd_ig < cxlr_ig) {
+		dev_dbg(&cxlr->dev,
+			"%s HBIG must be greater than region IG (%d < %d)\n",
+			dev_name(&rootd->dev), rootd_ig, cxlr_ig);
+		return false;
+	}
+
+	/*
+	 * ((2^(CFMWS.HBIG - Device.RLabel.IG) * (2^CFMWS.ENIW)) > Device.RLabel.NLabel)
+	 *
+	 * XXX: 2^CFMWS.ENIW is trying to decode the NIW. Instead, use the look
+	 * up function which supports non power of 2 interleave configurations.
+	 */
+	if (((1 << (rootd_ig - cxlr_ig)) * (1 << rootd_eniw)) > cxlr_iw) {
+		dev_dbg(&cxlr->dev,
+			"granularity ratio requires a larger number of devices (%d) than currently configured (%d)\n",
+			((1 << (rootd_ig - cxlr_ig)) * (1 << rootd_eniw)),
+			cxlr_iw);
+		return false;
+	}
+
+	/*
+	 * CFMWS.InterleaveTargetList[n] must contain all devices, x where:
+	 *	(Device[x],RegionLabel.Position >> (CFMWS.HBIG -
+	 *	Device[x].RegionLabel.InterleaveGranularity)) &
+	 *	((2^CFMWS.ENIW) - 1) = n
+	 */
+	for_each_cxl_decoder_target(target, rootd, i) {
+		if (((i >> (rootd_ig - cxlr_ig))) &
+		    (((1 << rootd_eniw) - 1) != target->port_id)) {
+			dev_dbg(&cxlr->dev,
+				"One or more devices are not connected to the correct hostbridge.\n");
+			return false;
+		}
+	}
+
 	return true;
 }
 
