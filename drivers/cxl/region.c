@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /* Copyright(c) 2021 Intel Corporation. All rights reserved. */
 #include <linux/platform_device.h>
+#include <linux/genalloc.h>
 #include <linux/device.h>
 #include <linux/module.h>
 #include <linux/pci.h>
@@ -62,6 +63,20 @@ static struct cxl_port *get_root_decoder(const struct cxl_memdev *endpoint)
 		return to_cxl_port(hostbridge->dev.parent);
 
 	return NULL;
+}
+
+static void release_cxl_region(void *r)
+{
+	struct cxl_region *cxlr = (struct cxl_region *)r;
+	struct cxl_decoder *rootd = rootd_from_region(cxlr);
+	struct resource *res = &rootd->platform_res;
+	resource_size_t start, size;
+
+	start = cxlr->res->start;
+	size = resource_size(cxlr->res);
+
+	__release_region(res, start, size);
+	gen_pool_free(rootd->address_space, start, size);
 }
 
 /**
@@ -129,8 +144,29 @@ static int sanitize_region(const struct cxl_region *cxlr)
  */
 static int allocate_address_space(struct cxl_region *cxlr)
 {
-	/* TODO */
-	return 0;
+	struct cxl_decoder *rootd = rootd_from_region(cxlr);
+	unsigned long start;
+
+	start = gen_pool_alloc(rootd->address_space, cxlr->config.size);
+	if (!start) {
+		dev_dbg(&cxlr->dev, "Couldn't allocate %lluM of address space",
+			cxlr->config.size >> 20);
+		return -ENOMEM;
+	}
+
+	cxlr->res =
+		__request_region(&rootd->platform_res, start, cxlr->config.size,
+				 dev_name(&cxlr->dev), IORESOURCE_MEM);
+	if (!cxlr->res) {
+		dev_dbg(&cxlr->dev, "Couldn't obtain region from %s (%pR)\n",
+			dev_name(&rootd->dev), &rootd->platform_res);
+		gen_pool_free(rootd->address_space, start, cxlr->config.size);
+		return -ENOMEM;
+	}
+
+	dev_dbg(&cxlr->dev, "resource %pR", cxlr->res);
+
+	return devm_add_action_or_reset(&cxlr->dev, release_cxl_region, cxlr);
 }
 
 /**
