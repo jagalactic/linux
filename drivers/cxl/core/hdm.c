@@ -268,3 +268,212 @@ int devm_cxl_enumerate_decoders(struct cxl_hdm *cxlhdm)
 	return 0;
 }
 EXPORT_SYMBOL_NS_GPL(devm_cxl_enumerate_decoders, CXL);
+
+#define COMMIT_TIMEOUT_MS 10
+static int wait_for_commit(struct cxl_decoder *cxld)
+{
+	const unsigned long end = jiffies + msecs_to_jiffies(COMMIT_TIMEOUT_MS);
+	struct cxl_port *port = to_cxl_port(cxld->dev.parent);
+	void __iomem *hdm_decoder;
+	struct cxl_hdm *cxlhdm;
+	u32 ctrl;
+
+	cxlhdm = dev_get_drvdata(&port->dev);
+	hdm_decoder = cxlhdm->regs.hdm_decoder;
+
+	while (1) {
+		ctrl = readl(hdm_decoder +
+			     CXL_HDM_DECODER0_CTRL_OFFSET(cxld->id));
+		if (FIELD_GET(CXL_HDM_DECODER0_CTRL_COMMITTED, ctrl))
+			break;
+
+		if (time_after(jiffies, end)) {
+			dev_err(&cxld->dev, "HDM decoder commit timeout %x\n",
+				ctrl);
+			return -ETIMEDOUT;
+		}
+		if ((ctrl & CXL_HDM_DECODER0_CTRL_COMMIT_ERROR) != 0) {
+			dev_err(&cxld->dev, "HDM decoder commit error %x\n",
+				ctrl);
+			return -ENXIO;
+		}
+	}
+
+	return 0;
+}
+
+/**
+ * cxl_commit_decoder() - Program a configured cxl_decoder
+ * @cxld: The preconfigured cxl decoder.
+ *
+ * A cxl decoder that is to be committed should have been earmarked as enabled.
+ * This mechanism acts as a soft reservation on the decoder.
+ *
+ * Returns 0 if commit was successful, negative error code otherwise.
+ */
+int cxl_commit_decoder(struct cxl_decoder *cxld)
+{
+	u32 ctrl, tl_lo, tl_hi, base_lo, base_hi, size_lo, size_hi;
+	struct cxl_port *port = to_cxl_port(cxld->dev.parent);
+	void __iomem *hdm_decoder;
+	struct cxl_hdm *cxlhdm;
+	int rc;
+
+	/*
+	 * Decoder flags are entirely software controlled and therefore this
+	 * case is purely a driver bug.
+	 */
+	if (dev_WARN_ONCE(&port->dev, (cxld->flags & CXL_DECODER_F_ENABLE) != 0,
+			  "Invalid %s enable state\n", dev_name(&cxld->dev)))
+		return -ENXIO;
+
+	cxlhdm = dev_get_drvdata(&port->dev);
+	hdm_decoder = cxlhdm->regs.hdm_decoder;
+	ctrl = readl(hdm_decoder + CXL_HDM_DECODER0_CTRL_OFFSET(cxld->id));
+
+	/*
+	 * A decoder that's currently active cannot be changed without the
+	 * system being quiesced. While the driver should prevent against this,
+	 * for a variety of reasons the hardware might not be in sync with the
+	 * hardware and so, do not splat on error.
+	 */
+	size_hi = readl(hdm_decoder +
+			CXL_HDM_DECODER0_SIZE_HIGH_OFFSET(cxld->id));
+	size_lo =
+		readl(hdm_decoder + CXL_HDM_DECODER0_SIZE_LOW_OFFSET(cxld->id));
+	if (FIELD_GET(CXL_HDM_DECODER0_CTRL_COMMITTED, ctrl) &&
+	    (size_lo + size_hi)) {
+		dev_err(&port->dev, "Tried to change an active decoder (%s)\n",
+			dev_name(&cxld->dev));
+		return -EBUSY;
+	}
+
+	u32p_replace_bits(&ctrl, cxl_to_ig(cxld->interleave_granularity),
+			  CXL_HDM_DECODER0_CTRL_IG_MASK);
+	u32p_replace_bits(&ctrl, cxl_to_eniw(cxld->interleave_ways),
+			  CXL_HDM_DECODER0_CTRL_IW_MASK);
+	u32p_replace_bits(&ctrl, 1, CXL_HDM_DECODER0_CTRL_COMMIT);
+
+	/* TODO: set based on type */
+	u32p_replace_bits(&ctrl, 1, CXL_HDM_DECODER0_CTRL_TYPE);
+
+	base_lo = GENMASK(31, 28) & lower_32_bits(cxld->decoder_range.start);
+	base_hi = upper_32_bits(cxld->decoder_range.start);
+
+	size_lo = GENMASK(31, 28) & (u32)(range_len(&cxld->decoder_range));
+	size_hi = upper_32_bits(range_len(&cxld->decoder_range) >> 32);
+
+	if (cxld->nr_targets > 0) {
+		tl_hi = 0;
+
+		tl_lo = FIELD_PREP(GENMASK(7, 0), cxld->target[0]->port_id);
+
+		if (cxld->interleave_ways > 1)
+			tl_lo |= FIELD_PREP(GENMASK(15, 8),
+					    cxld->target[1]->port_id);
+		if (cxld->interleave_ways > 2)
+			tl_lo |= FIELD_PREP(GENMASK(23, 16),
+					    cxld->target[2]->port_id);
+		if (cxld->interleave_ways > 3)
+			tl_lo |= FIELD_PREP(GENMASK(31, 24),
+					    cxld->target[3]->port_id);
+		if (cxld->interleave_ways > 4)
+			tl_hi |= FIELD_PREP(GENMASK(7, 0),
+					    cxld->target[4]->port_id);
+		if (cxld->interleave_ways > 5)
+			tl_hi |= FIELD_PREP(GENMASK(15, 8),
+					    cxld->target[5]->port_id);
+		if (cxld->interleave_ways > 6)
+			tl_hi |= FIELD_PREP(GENMASK(23, 16),
+					    cxld->target[6]->port_id);
+		if (cxld->interleave_ways > 7)
+			tl_hi |= FIELD_PREP(GENMASK(31, 24),
+					    cxld->target[7]->port_id);
+
+		writel(tl_hi, hdm_decoder + CXL_HDM_DECODER0_TL_HIGH(cxld->id));
+		writel(tl_lo, hdm_decoder + CXL_HDM_DECODER0_TL_LOW(cxld->id));
+	} else {
+		/* Zero out skip list for devices */
+		writel(0, hdm_decoder + CXL_HDM_DECODER0_TL_HIGH(cxld->id));
+		writel(0, hdm_decoder + CXL_HDM_DECODER0_TL_LOW(cxld->id));
+	}
+
+	writel(size_hi,
+	       hdm_decoder + CXL_HDM_DECODER0_SIZE_HIGH_OFFSET(cxld->id));
+	writel(size_lo,
+	       hdm_decoder + CXL_HDM_DECODER0_SIZE_LOW_OFFSET(cxld->id));
+	writel(base_hi,
+	       hdm_decoder + CXL_HDM_DECODER0_BASE_HIGH_OFFSET(cxld->id));
+	writel(base_lo,
+	       hdm_decoder + CXL_HDM_DECODER0_BASE_LOW_OFFSET(cxld->id));
+	writel(ctrl, hdm_decoder + CXL_HDM_DECODER0_CTRL_OFFSET(cxld->id));
+
+	rc = wait_for_commit(cxld);
+	if (rc)
+		return rc;
+
+	cxld->flags |= CXL_DECODER_F_ENABLE;
+
+#define DPORT_TL_STR "%d %d %d %d %d %d %d %d"
+#define DPORT(i)                                                               \
+	(cxld->nr_targets && cxld->interleave_ways > (i)) ?                    \
+		cxld->target[(i)]->port_id :                                   \
+		      -1
+#define DPORT_TL                                                               \
+	DPORT(0), DPORT(1), DPORT(2), DPORT(3), DPORT(4), DPORT(5), DPORT(6),  \
+		DPORT(7)
+
+	dev_dbg(&cxld->dev,
+		"%s (depth %d)\n\tBase %pa\n\tSize %llu\n\tIG %u (%ub)\n\tENIW %u (x%u)\n\tTargetList: \n" DPORT_TL_STR,
+		dev_name(&port->dev), port->depth, &cxld->decoder_range.start,
+		range_len(&cxld->decoder_range),
+		cxl_to_ig(cxld->interleave_granularity),
+		cxld->interleave_granularity,
+		cxl_to_eniw(cxld->interleave_ways), cxld->interleave_ways,
+		DPORT_TL);
+#undef DPORT_TL
+#undef DPORT
+#undef DPORT_TL_STR
+	return 0;
+}
+EXPORT_SYMBOL_GPL(cxl_commit_decoder);
+
+/**
+ * cxl_disable_decoder() - Disables a decoder
+ * @cxld: The active cxl decoder.
+ *
+ * CXL decoders (as of 2.0 spec) have no way to deactivate them other than to
+ * set the size of the HDM to 0. This function will clear all registers, and if
+ * the decoder is active, commit the 0'd out registers.
+ */
+void cxl_disable_decoder(struct cxl_decoder *cxld)
+{
+	struct cxl_port *port = to_cxl_port(cxld->dev.parent);
+	void __iomem *hdm_decoder;
+	struct cxl_hdm *cxlhdm;
+	u32 ctrl;
+
+	cxlhdm = dev_get_drvdata(&port->dev);
+	hdm_decoder = cxlhdm->regs.hdm_decoder;
+	ctrl = readl(hdm_decoder + CXL_HDM_DECODER0_CTRL_OFFSET(cxld->id));
+
+	if (dev_WARN_ONCE(&port->dev, (cxld->flags & CXL_DECODER_F_ENABLE) == 0,
+			  "Invalid decoder enable state\n"))
+		return;
+
+	cxld->flags &= ~CXL_DECODER_F_ENABLE;
+
+	/* There's no way to "uncommit" a committed decoder, only 0 size it */
+	writel(0, hdm_decoder + CXL_HDM_DECODER0_TL_HIGH(cxld->id));
+	writel(0, hdm_decoder + CXL_HDM_DECODER0_TL_LOW(cxld->id));
+	writel(0, hdm_decoder + CXL_HDM_DECODER0_SIZE_HIGH_OFFSET(cxld->id));
+	writel(0, hdm_decoder + CXL_HDM_DECODER0_SIZE_LOW_OFFSET(cxld->id));
+	writel(0, hdm_decoder + CXL_HDM_DECODER0_BASE_HIGH_OFFSET(cxld->id));
+	writel(0, hdm_decoder + CXL_HDM_DECODER0_BASE_LOW_OFFSET(cxld->id));
+
+	/* If the device isn't actually active, just zero out all the fields */
+	if (FIELD_GET(CXL_HDM_DECODER0_CTRL_COMMITTED, ctrl))
+		writel(CXL_HDM_DECODER0_CTRL_COMMIT,
+		       hdm_decoder + CXL_HDM_DECODER0_CTRL_OFFSET(cxld->id));
+}
+EXPORT_SYMBOL_GPL(cxl_disable_decoder);

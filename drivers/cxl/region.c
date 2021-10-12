@@ -678,10 +678,52 @@ err:
 	return rc;
 }
 
-static int bind_region(const struct cxl_region *cxlr)
+static int bind_region(struct cxl_region *cxlr)
 {
-	/* TODO: */
-	return 0;
+	struct cxl_decoder *cxld, *d;
+	int rc;
+
+	list_for_each_entry_safe(cxld, d, &cxlr->staged_list, region_link) {
+		rc = cxl_commit_decoder(cxld);
+		if (!rc) {
+			list_move_tail(&cxld->region_link, &cxlr->commit_list);
+		} else {
+			dev_dbg(&cxlr->dev, "Failed to commit %s\n",
+				dev_name(&cxld->dev));
+			break;
+		}
+	}
+
+	list_for_each_entry_safe(cxld, d, &cxlr->commit_list, region_link) {
+		if (rc) {
+			cxl_disable_decoder(cxld);
+			list_del(&cxld->region_link);
+		}
+	}
+
+	if (rc)
+		cleanup_staged_decoders(cxlr);
+
+	BUG_ON(!list_empty(&cxlr->staged_list));
+	return rc;
+}
+
+static void region_unregister(void *dev)
+{
+	struct cxl_region *region = to_cxl_region(dev);
+	struct cxl_decoder *cxld, *d;
+
+	if (dev_WARN_ONCE(dev, !list_empty(&region->staged_list),
+			  "Decoders still staged"))
+		cleanup_staged_decoders(region);
+
+	/* TODO: teardown the nd_region */
+
+	list_for_each_entry_safe(cxld, d, &region->commit_list, region_link) {
+		cxl_disable_decoder(cxld);
+		list_del(&cxld->region_link);
+		cxl_put_decoder(cxld);
+	}
 }
 
 static int cxl_region_probe(struct device *dev)
@@ -732,20 +774,26 @@ static int cxl_region_probe(struct device *dev)
 		put_device(&ours->dev);
 
 	ret = collect_ep_decoders(cxlr);
-	if (ret)
-		goto err;
+	if (ret) {
+		cleanup_staged_decoders(cxlr);
+		return ret;
+	}
 
 	ret = bind_region(cxlr);
-	if (ret)
-		goto err;
+	if (ret) {
+		/* bind_region should cleanup after itself */
+		if (dev_WARN_ONCE(dev, !list_empty(&cxlr->staged_list),
+				  "Region bind failed to cleanup staged decoders\n"))
+			cleanup_staged_decoders(cxlr);
+		if (dev_WARN_ONCE(dev, !list_empty(&cxlr->commit_list),
+				  "Region bind failed to cleanup committed decoders\n"))
+			region_unregister(&cxlr->dev);
+		return ret;
+	}
 
 	cxlr->active = true;
 	dev_info(dev, "Bound");
-	return 0;
-
-err:
-	cleanup_staged_decoders(cxlr);
-	return ret;
+	return devm_add_action_or_reset(dev, region_unregister, dev);
 }
 
 static struct cxl_driver cxl_region_driver = {
