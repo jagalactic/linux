@@ -428,6 +428,7 @@ static bool region_hb_rp_config_valid(struct cxl_region *cxlr,
 		return simple_config(cxlr, hbs[0]);
 
 	for (i = 0; i < hb_count; i++) {
+		struct cxl_decoder *cxld;
 		int idx, position_mask;
 		struct cxl_dport *rp;
 		struct cxl_port *hb;
@@ -486,6 +487,18 @@ static bool region_hb_rp_config_valid(struct cxl_region *cxlr,
 						"One or more devices are not connected to the correct Host Bridge Root Port\n");
 					goto err;
 				}
+
+				if (!state_update)
+					continue;
+
+				if (dev_WARN_ONCE(&cxld->dev,
+						  port_grouping >= cxld->nr_targets,
+						  "Invalid port grouping %d/%d\n",
+						  port_grouping, cxld->nr_targets))
+					goto err;
+
+				cxld->interleave_ways++;
+				cxld->target[port_grouping] = get_rp(ep);
 			}
 		}
 	}
@@ -538,7 +551,7 @@ static bool rootd_valid(const struct cxl_region *cxlr,
 
 struct rootd_context {
 	const struct cxl_region *cxlr;
-	struct cxl_port *hbs[CXL_DECODER_MAX_INTERLEAVE];
+	const struct cxl_port *hbs[CXL_DECODER_MAX_INTERLEAVE];
 	int count;
 };
 
@@ -564,7 +577,7 @@ static struct cxl_decoder *find_rootd(const struct cxl_region *cxlr,
 	struct rootd_context ctx;
 	struct device *ret;
 
-	ctx.cxlr = cxlr;
+	ctx.cxlr = (struct cxl_region *)cxlr;
 
 	ret = device_find_child((struct device *)&root->dev, &ctx, rootd_match);
 	if (ret)
