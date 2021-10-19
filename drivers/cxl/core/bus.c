@@ -25,6 +25,31 @@
  */
 
 static DEFINE_IDA(cxl_port_ida);
+static DECLARE_RWSEM(root_host_sem);
+
+static struct device *cxl_root_host;
+
+int cxl_register_root(struct device *host)
+{
+	down_write(&root_host_sem);
+	if (cxl_root_host)
+		return -EBUSY;
+
+	cxl_root_host = get_device(host);
+	up_write(&root_host_sem);
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(cxl_register_root);
+
+void cxl_unregister_root(void)
+{
+	down_write(&root_host_sem);
+	put_device(cxl_root_host);
+	cxl_root_host = NULL;
+	up_write(&root_host_sem);
+}
+EXPORT_SYMBOL_GPL(cxl_unregister_root);
 
 static ssize_t devtype_show(struct device *dev, struct device_attribute *attr,
 			    char *buf)
@@ -362,12 +387,11 @@ err:
 
 /**
  * devm_cxl_add_port - register a cxl_port in CXL memory decode hierarchy
- * @host: host device for devm operations
  * @uport: "physical" device implementing this upstream port
  * @component_reg_phys: (optional) for configurable cxl_port instances
  * @parent_port: next hop up in the CXL memory decode hierarchy
  */
-struct cxl_port *devm_cxl_add_port(struct device *host, struct device *uport,
+struct cxl_port *devm_cxl_add_port(struct device *uport,
 				   resource_size_t component_reg_phys,
 				   struct cxl_port *parent_port)
 {
@@ -391,11 +415,11 @@ struct cxl_port *devm_cxl_add_port(struct device *host, struct device *uport,
 	if (rc)
 		goto err;
 
-	rc = devm_add_action_or_reset(host, unregister_port, port);
+	rc = devm_add_action_or_reset(cxl_root_host, unregister_port, port);
 	if (rc)
 		return ERR_PTR(rc);
 
-	rc = devm_cxl_link_uport(host, port);
+	rc = devm_cxl_link_uport(cxl_root_host, port);
 	if (rc)
 		return ERR_PTR(rc);
 

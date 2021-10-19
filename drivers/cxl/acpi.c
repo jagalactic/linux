@@ -295,8 +295,7 @@ static int add_host_bridge_uport(struct device *match, void *arg)
 		return -ENODEV;
 	}
 
-	port = devm_cxl_add_port(host, match, dport->component_reg_phys,
-				 root_port);
+	port = devm_cxl_add_port(match, dport->component_reg_phys, root_port);
 	if (IS_ERR(port))
 		return PTR_ERR(port);
 	dev_dbg(host, "%s: add: %s\n", dev_name(match), dev_name(&port->dev));
@@ -435,7 +434,9 @@ static int cxl_acpi_probe(struct platform_device *pdev)
 	struct device *host = &pdev->dev;
 	struct acpi_device *adev = ACPI_COMPANION(host);
 
-	root_port = devm_cxl_add_port(host, host, CXL_RESOURCE_NONE, NULL);
+	cxl_register_root(host);
+
+	root_port = devm_cxl_add_port(host, CXL_RESOURCE_NONE, NULL);
 	if (IS_ERR(root_port))
 		return PTR_ERR(root_port);
 	dev_dbg(host, "add: %s\n", dev_name(&root_port->dev));
@@ -471,6 +472,13 @@ out:
 	return 0;
 }
 
+static int cxl_acpi_remove(struct platform_device *pdev)
+{
+	cxl_unregister_root();
+
+	return 0;
+}
+
 static bool native_acpi0017 = true;
 
 static const struct acpi_device_id cxl_acpi_ids[] = {
@@ -481,6 +489,7 @@ MODULE_DEVICE_TABLE(acpi, cxl_acpi_ids);
 
 static struct platform_driver cxl_acpi_driver = {
 	.probe = cxl_acpi_probe,
+	.remove = cxl_acpi_remove,
 	.driver = {
 		.name = KBUILD_MODNAME,
 		.acpi_match_table = cxl_acpi_ids,
