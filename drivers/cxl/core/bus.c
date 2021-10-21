@@ -490,24 +490,17 @@ static int decoder_populate_targets(struct cxl_decoder *cxld,
 	if (!target_map)
 		return 0;
 
-	device_lock(&port->dev);
-	if (list_empty(&port->dports)) {
-		rc = -EINVAL;
-		goto out_unlock;
-	}
+	device_lock_assert(&port->dev);
+	if (list_empty(&port->dports))
+		return -EINVAL;
 
 	for (i = 0; i < cxld->nr_targets; i++) {
 		struct cxl_dport *dport = find_dport(port, target_map[i]);
 
-		if (!dport) {
-			rc = -ENXIO;
-			goto out_unlock;
-		}
+		if (!dport)
+			return -ENXIO;
 		cxld->target[i] = dport;
 	}
-
-out_unlock:
-	device_unlock(&port->dev);
 
 	return rc;
 }
@@ -571,7 +564,7 @@ err:
 EXPORT_SYMBOL_GPL(cxl_decoder_alloc);
 
 /**
- * cxl_decoder_add - Add a decoder with targets
+ * cxl_decoder_add_locked - Add a decoder with targets
  * @cxld: The cxl decoder allocated by cxl_decoder_alloc()
  * @target_map: A list of downstream ports that this decoder can direct memory
  *              traffic to. These numbers should correspond with the port number
@@ -581,16 +574,18 @@ EXPORT_SYMBOL_GPL(cxl_decoder_alloc);
  * is an endpoint device. A more awkward example is a hostbridge whose root
  * ports get hot added (technically possible, though unlikely).
  *
- * Context: Process context. Takes and releases the cxld's device lock.
+ * This is the locked variant of cxl_decoder_add().
+ *
+ * Context: Process context. Expects the cxld's device lock to be held.
  *
  * Return: Negative error code if the decoder wasn't properly configured; else
  *	   returns 0.
  */
-int cxl_decoder_add(struct cxl_decoder *cxld, int *target_map)
+int cxl_decoder_add_locked(struct cxl_decoder *cxld, int *target_map)
 {
 	struct cxl_port *port;
 	struct device *dev;
-	int rc;
+	int rc = 0;
 
 	if (WARN_ON_ONCE(!cxld))
 		return -EINVAL;
@@ -604,11 +599,13 @@ int cxl_decoder_add(struct cxl_decoder *cxld, int *target_map)
 	dev = &cxld->dev;
 
 	port = to_cxl_port(cxld->dev.parent);
-	if (!is_endpoint_decoder(dev)) {
+
+	device_lock(&port->dev);
+	if (!is_endpoint_decoder(dev))
 		rc = decoder_populate_targets(cxld, port, target_map);
-		if (rc)
-			return rc;
-	}
+	device_unlock(&port->dev);
+	if (rc)
+		return rc;
 
 	rc = dev_set_name(dev, "decoder%d.%d", port->id, cxld->id);
 	if (rc)
@@ -618,6 +615,36 @@ int cxl_decoder_add(struct cxl_decoder *cxld, int *target_map)
 		cxld->platform_res.name = dev_name(dev);
 
 	return device_add(dev);
+}
+EXPORT_SYMBOL_GPL(cxl_decoder_add_locked);
+
+/**
+ * cxl_decoder_add - Add a decoder with targets
+ * @cxld: The cxl decoder allocated by cxl_decoder_alloc()
+ * @target_map: A list of downstream ports that this decoder can direct memory
+ *              traffic to. These numbers should correspond with the port number
+ *              in the PCIe Link Capabilities structure.
+ *
+ * This is the unlocked variant of cxl_decoder_add_locked().
+ * See cxl_decoder_add_locked().
+ *
+ * Context: Process context. Takes and releases the cxld's device lock.
+ */
+int cxl_decoder_add(struct cxl_decoder *cxld, int *target_map)
+{
+	int rc;
+
+	if (WARN_ON_ONCE(!cxld))
+		return -EINVAL;
+
+	if (WARN_ON_ONCE(IS_ERR(cxld)))
+		return PTR_ERR(cxld);
+
+	device_lock(&to_cxl_port(cxld->dev.parent)->dev);
+	rc = cxl_decoder_add_locked(cxld, target_map);
+	device_unlock(&to_cxl_port(cxld->dev.parent)->dev);
+
+	return rc;
 }
 EXPORT_SYMBOL_GPL(cxl_decoder_add);
 
