@@ -163,7 +163,8 @@ static int __cxl_pci_mbox_send_cmd(struct cxl_dev_state *cxlds,
 	writeq(cmd_reg, cxlds->regs.mbox + CXLDEV_MBOX_CMD_OFFSET);
 
 	/* #4 */
-	dev_dbg(dev, "Sending command: 0x%04x\n", mbox_cmd->opcode);
+	dev_dbg(dev, "Sending command  0x%04x (in=%ld, out=%ld)\n",
+		mbox_cmd->opcode, mbox_cmd->size_in, mbox_cmd->size_out);
 	writel(CXLDEV_MBOX_CTRL_DOORBELL,
 	       cxlds->regs.mbox + CXLDEV_MBOX_CTRL_OFFSET);
 
@@ -764,7 +765,11 @@ static int cxl_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	if (rc)
 		return rc;
 
+#if 1
+	rc = cxl_mu_enumerate_cmds(cxlds);
+#else
 	rc = cxl_enumerate_cmds(cxlds);
+#endif
 	if (rc)
 		return rc;
 
