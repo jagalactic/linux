@@ -546,7 +546,7 @@ static struct cxl_mbox_get_supported_logs *cxl_get_gsl(struct cxl_mem *cxlm)
 	struct cxl_mbox_get_supported_logs *ret;
 	int rc;
 
-	ret = kvmalloc(cxlm->payload_size, GFP_KERNEL);
+	ret = kvzalloc(cxlm->payload_size, GFP_KERNEL);
 	if (!ret)
 		return ERR_PTR(-ENOMEM);
 
@@ -632,6 +632,35 @@ out:
 	return rc;
 }
 EXPORT_SYMBOL_GPL(cxl_mem_enumerate_cmds);
+
+/**
+ * cxl_mu_enumerate_cmds()
+ *
+ * Fake a command effects log for sb852m
+ */
+int cxl_mu_mem_enumerate_cmds(struct cxl_mem *cxlm)
+{
+	struct cxl_mem_command *cmd;
+	struct cxl_cel_entry *mu_cel;
+
+	mu_cel = kvzalloc(PAGE_SIZE, GFP_KERNEL);
+	if (!mu_cel)
+		return -ENOMEM;
+
+	mu_cel[0].opcode = CXL_MBOX_OP_IDENTIFY;
+	mu_cel[0].effect = 0; /* no notable effects */
+
+	cxl_walk_cel(cxlm, 4, (u8 *)mu_cel);
+	kvfree(mu_cel);
+
+	/* In case CEL was bogus, enable some default commands. */
+	cxl_for_each_cmd(cmd)
+		if (cmd->flags & CXL_CMD_FLAG_FORCE_ENABLE)
+			set_bit(cmd->info.id, cxlm->enabled_cmds);
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(cxl_mu_mem_enumerate_cmds);
 
 /**
  * cxl_mem_get_partition_info - Get partition info

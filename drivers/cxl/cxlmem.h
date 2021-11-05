@@ -262,6 +262,7 @@ int cxl_mem_mbox_send_cmd(struct cxl_mem *cxlm, u16 opcode, void *in,
 			  size_t in_size, void *out, size_t out_size);
 int cxl_mem_identify(struct cxl_mem *cxlm);
 int cxl_mem_enumerate_cmds(struct cxl_mem *cxlm);
+int cxl_mu_mem_enumerate_cmds(struct cxl_mem *cxlm);
 int cxl_mem_create_range_info(struct cxl_mem *cxlm);
 struct cxl_mem *cxl_mem_create(struct device *dev);
 void set_exclusive_cxl_commands(struct cxl_mem *cxlm, unsigned long *cmds);
