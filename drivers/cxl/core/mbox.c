@@ -511,7 +511,7 @@ static int handle_mailbox_cmd_from_user(struct cxl_dev_state *cxlds,
 		dev_WARN_ONCE(dev, mbox_cmd->size_out > *size_out,
 			      "Invalid return size\n");
 		printk("%s: output payload %ld bytes\n",
-		       __func__, mbox_cmd.size_out);
+		       __func__, mbox_cmd->size_out);
 		if (copy_to_user(u64_to_user_ptr(out_payload),
 				 mbox_cmd->payload_out, mbox_cmd->size_out)) {
 			rc = -EFAULT;
@@ -704,6 +704,35 @@ out:
 	return rc;
 }
 EXPORT_SYMBOL_NS_GPL(cxl_enumerate_cmds, CXL);
+
+/**
+ * cxl_mu_enumerate_cmds()
+ *
+ * Fake a command effects log for sb852m
+ */
+int cxl_mu_enumerate_cmds(struct cxl_dev_state *cxlds)
+{
+	struct cxl_mem_command *cmd;
+	struct cxl_cel_entry *mu_cel;
+
+	mu_cel = kvzalloc(PAGE_SIZE, GFP_KERNEL);
+	if (!mu_cel)
+		return -ENOMEM;
+
+	mu_cel[0].opcode = CXL_MBOX_OP_IDENTIFY;
+	mu_cel[0].effect = 0; /* no notable effects */
+
+	cxl_walk_cel(cxlds, 4, (u8 *)mu_cel);
+	kvfree(mu_cel);
+
+	/* In case CEL was bogus, enable some default commands. */
+	cxl_for_each_cmd(cmd)
+		if (cmd->flags & CXL_CMD_FLAG_FORCE_ENABLE)
+			set_bit(cmd->info.id, cxlds->enabled_cmds);
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(cxl_mu_enumerate_cmds);
 
 /**
  * cxl_mem_get_partition_info - Get partition info
