@@ -105,6 +105,7 @@ static inline int cxl_from_granularity(u16 g)
 #define CXLDEV_CAP_CAP_ID_DEVICE_STATUS 0x1
 #define CXLDEV_CAP_CAP_ID_PRIMARY_MAILBOX 0x2
 #define CXLDEV_CAP_CAP_ID_SECONDARY_MAILBOX 0x3
+
 #define CXLDEV_CAP_CAP_ID_MEMDEV 0x4000
 
 /* CXL 2.0 8.2.8.4 Mailbox Registers */
