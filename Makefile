@@ -2,7 +2,7 @@
 VERSION = 5
 PATCHLEVEL = 15
 SUBLEVEL = 0
-EXTRAVERSION = -rc2-cxl2
+EXTRAVERSION = -rc2-cxl2x
 NAME = Opossums on Parade
 
 # *DOCUMENTATION*
