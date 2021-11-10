@@ -510,6 +510,8 @@ static int handle_mailbox_cmd_from_user(struct cxl_dev_state *cxlds,
 	if (mbox_cmd->size_out) {
 		dev_WARN_ONCE(dev, mbox_cmd->size_out > *size_out,
 			      "Invalid return size\n");
+		printk("%s: output payload %ld bytes\n",
+		       __func__, mbox_cmd.size_out);
 		if (copy_to_user(u64_to_user_ptr(out_payload),
 				 mbox_cmd->payload_out, mbox_cmd->size_out)) {
 			rc = -EFAULT;
