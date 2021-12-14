@@ -45,26 +45,31 @@ static int wait_for_media(struct cxl_memdev *cxlmd)
 	return 0;
 }
 
-static int create_endpoint(struct cxl_memdev *cxlmd,
-			   struct cxl_port *parent_port)
+static struct cxl_port *create_endpoint(struct cxl_memdev *cxlmd,
+					struct cxl_port *parent_port)
 {
 	struct cxl_dev_state *cxlds = cxlmd->cxlds;
 	struct cxl_port *endpoint;
+	int rc;
 
 	endpoint = devm_cxl_add_port(&parent_port->dev, &cxlmd->dev,
 				     cxlds->component_reg_phys, parent_port);
 	if (IS_ERR(endpoint))
-		return PTR_ERR(endpoint);
+		return endpoint;
 
 	dev_dbg(&cxlmd->dev, "add: %s\n", dev_name(&endpoint->dev));
 
 	if (!endpoint->dev.driver) {
 		dev_err(&cxlmd->dev, "%s failed probe\n",
 			dev_name(&endpoint->dev));
-		return -ENXIO;
+		return ERR_PTR(-ENXIO);
 	}
 
-	return cxl_endpoint_autoremove(cxlmd, endpoint);
+	rc = cxl_endpoint_autoremove(cxlmd, endpoint);
+	if (rc)
+		return ERR_PTR(rc);
+
+	return endpoint;
 }
 
 /**
@@ -127,11 +132,18 @@ out:
 	return do_hdm_init;
 }
 
+static void delete_memdev(void *dev)
+{
+	struct cxl_memdev *cxlmd = dev;
+
+	put_device(&cxlmd->port->dev);
+}
+
 static int cxl_mem_probe(struct device *dev)
 {
 	struct cxl_memdev *cxlmd = to_cxl_memdev(dev);
 	struct cxl_dev_state *cxlds = cxlmd->cxlds;
-	struct cxl_port *parent_port;
+	struct cxl_port *parent_port, *ep_port;
 	int rc;
 
 	/*
@@ -201,7 +213,16 @@ static int cxl_mem_probe(struct device *dev)
 		goto out;
 	}
 
-	rc = create_endpoint(cxlmd, parent_port);
+	ep_port = create_endpoint(cxlmd, parent_port);
+	if (IS_ERR(ep_port)) {
+		rc = PTR_ERR(ep_port);
+		goto out;
+	}
+
+	get_device(&ep_port->dev);
+	cxlmd->port = ep_port;
+
+	rc = devm_add_action_or_reset(dev, delete_memdev, cxlmd);
 out:
 	cxl_device_unlock(&parent_port->dev);
 	put_device(&parent_port->dev);
