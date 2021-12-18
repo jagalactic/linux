@@ -359,21 +359,59 @@ static bool has_switch(const struct cxl_region *cxlr)
 	return false;
 }
 
+static struct cxl_decoder *get_decoder(struct cxl_region *cxlr,
+				       struct cxl_port *p)
+{
+	struct cxl_decoder *cxld;
+
+	cxld = cxl_get_decoder(p);
+	if (IS_ERR(cxld)) {
+		dev_dbg(&cxlr->dev, "Couldn't get decoder for %s\n",
+			dev_name(&p->dev));
+		return cxld;
+	}
+
+	cxld->decoder_range = (struct range){ .start = cxlr->res->start,
+					      .end = cxlr->res->end };
+
+	list_add_tail(&cxld->region_link,
+		      (struct list_head *)&cxlr->staged_list);
+
+	return cxld;
+}
+
+static bool simple_config(struct cxl_region *cxlr, struct cxl_port *hb)
+{
+	struct cxl_decoder *cxld;
+
+	cxld = get_decoder(cxlr, hb);
+	if (IS_ERR(cxld))
+		return false;
+
+	cxld->interleave_ways = 1;
+	cxld->interleave_granularity = region_granularity(cxlr);
+	cxld->target[0] = get_rp(cxlr->config.targets[0]);
+	return true;
+}
+
 /**
  * region_hb_rp_config_valid() - determine root port ordering is correct
  * @cxlr: Region to validate
  * @rootd: root decoder for this @cxlr
+ * @state_update: Whether or not to update port state
  *
  * The algorithm is outlined in 2.13.15 "Verify HB root port configuration
  * sequence" of the CXL Memory Device SW Guide (Rev1p0).
  *
  * Returns true if the configuration is valid.
  */
-static bool region_hb_rp_config_valid(const struct cxl_region *cxlr,
-				      const struct cxl_decoder *rootd)
+static bool region_hb_rp_config_valid(struct cxl_region *cxlr,
+				      const struct cxl_decoder *rootd,
+				      bool state_update)
 {
 	const int num_root_ports = get_num_root_ports(cxlr);
 	struct cxl_port *hbs[CXL_DECODER_MAX_INTERLEAVE];
+	struct cxl_decoder *cxld, *c;
 	int hb_count, i;
 
 	hb_count = get_unique_hostbridges(cxlr, hbs);
@@ -386,8 +424,8 @@ static bool region_hb_rp_config_valid(const struct cxl_region *cxlr,
 	 * Are all devices in this region on the same CXL Host Bridge
 	 * Root Port?
 	 */
-	if (num_root_ports == 1 && !has_switch(cxlr))
-		return true;
+	if (num_root_ports == 1 && !has_switch(cxlr) && state_update)
+		return simple_config(cxlr, hbs[0]);
 
 	for (i = 0; i < hb_count; i++) {
 		int idx, position_mask;
@@ -396,6 +434,20 @@ static bool region_hb_rp_config_valid(const struct cxl_region *cxlr,
 
 		/* Get next CXL Host Bridge this region spans */
 		hb = hbs[i];
+
+		if (state_update) {
+			cxld = get_decoder(cxlr, hb);
+			if (IS_ERR(cxld)) {
+				dev_dbg(&cxlr->dev,
+					"Couldn't get decoder for %s\n",
+					dev_name(&hb->dev));
+				goto err;
+			}
+			cxld->interleave_ways = 0;
+			cxld->interleave_granularity = region_granularity(cxlr);
+		} else {
+			cxld = NULL;
+		}
 
 		/*
 		 * Calculate the position mask: NumRootPorts = 2^PositionMask
@@ -432,13 +484,20 @@ static bool region_hb_rp_config_valid(const struct cxl_region *cxlr,
 				if ((idx & position_mask) != port_grouping) {
 					dev_dbg(&cxlr->dev,
 						"One or more devices are not connected to the correct Host Bridge Root Port\n");
-					return false;
+					goto err;
 				}
 			}
 		}
 	}
 
 	return true;
+
+err:
+	dev_dbg(&cxlr->dev, "Couldn't get decoder for region\n");
+	list_for_each_entry_safe(cxld, c, &cxlr->staged_list, region_link)
+		cxl_put_decoder(cxld);
+
+	return false;
 }
 
 /**
@@ -454,7 +513,7 @@ static bool rootd_contains(const struct cxl_region *cxlr,
 }
 
 static bool rootd_valid(const struct cxl_region *cxlr,
-			const struct cxl_decoder *rootd)
+			const struct cxl_decoder *rootd, bool state_update)
 {
 	const struct cxl_memdev *endpoint = cxlr->config.targets[0];
 
@@ -467,7 +526,8 @@ static bool rootd_valid(const struct cxl_region *cxlr,
 	if (!region_xhb_config_valid(cxlr, rootd))
 		return false;
 
-	if (!region_hb_rp_config_valid(cxlr, rootd))
+	if (!region_hb_rp_config_valid((struct cxl_region *)cxlr, rootd,
+				       state_update))
 		return false;
 
 	if (!rootd_contains(cxlr, rootd))
@@ -490,7 +550,7 @@ static int rootd_match(struct device *dev, void *data)
 	if (!is_root_decoder(dev))
 		return 0;
 
-	return !!rootd_valid(cxlr, to_cxl_decoder(dev));
+	return !!rootd_valid(cxlr, to_cxl_decoder(dev), false);
 }
 
 /*
@@ -513,10 +573,39 @@ static struct cxl_decoder *find_rootd(const struct cxl_region *cxlr,
 	return NULL;
 }
 
-static int collect_ep_decoders(const struct cxl_region *cxlr)
+static void cleanup_staged_decoders(struct cxl_region *cxlr)
 {
-	/* TODO: */
+	struct cxl_decoder *cxld, *d;
+
+	list_for_each_entry_safe(cxld, d, &cxlr->staged_list, region_link) {
+		cxl_put_decoder(cxld);
+		list_del_init(&cxld->region_link);
+	}
+}
+
+static int collect_ep_decoders(struct cxl_region *cxlr)
+{
+	struct cxl_memdev *ep;
+	int i, rc = 0;
+
+	for_each_cxl_endpoint(ep, cxlr, i) {
+		struct cxl_decoder *cxld;
+
+		cxld = get_decoder(cxlr, ep->port);
+		if (IS_ERR(cxld)) {
+			rc = PTR_ERR(cxld);
+			goto err;
+		}
+
+		cxld->interleave_granularity = region_granularity(cxlr);
+		cxld->interleave_ways = region_ways(cxlr);
+	}
+
 	return 0;
+
+err:
+	cleanup_staged_decoders(cxlr);
+	return rc;
 }
 
 static int bind_region(const struct cxl_region *cxlr)
@@ -559,7 +648,7 @@ static int cxl_region_probe(struct device *dev)
 		return -ENXIO;
 	}
 
-	if (!rootd_valid(cxlr, rootd)) {
+	if (!rootd_valid(cxlr, rootd, true)) {
 		dev_err(dev, "Picked invalid rootd\n");
 		return -ENXIO;
 	}
@@ -574,14 +663,18 @@ static int cxl_region_probe(struct device *dev)
 
 	ret = collect_ep_decoders(cxlr);
 	if (ret)
-		return ret;
+		goto err;
 
 	ret = bind_region(cxlr);
-	if (!ret) {
-		cxlr->active = true;
-		dev_info(dev, "Bound");
-	}
+	if (ret)
+		goto err;
 
+	cxlr->active = true;
+	dev_info(dev, "Bound");
+	return 0;
+
+err:
+	cleanup_staged_decoders(cxlr);
 	return ret;
 }
 

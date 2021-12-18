@@ -305,5 +305,12 @@ struct cxl_hdm {
 	unsigned int target_count;
 	unsigned int interleave_mask;
 	struct cxl_port *port;
+
+	struct port_decoders {
+		unsigned long *free_mask;
+		int count;
+
+		struct cxl_decoder *cxld[CXL_DECODER_MAX_INSTANCES];
+	} decoders;
 };
 #endif /* __CXL_MEM_H__ */

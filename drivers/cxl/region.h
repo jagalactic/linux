@@ -14,6 +14,9 @@
  * @list: Node in decoder's region list.
  * @res: Resource this region carves out of the platform decode range.
  * @active: If the region has been activated.
+ * @staged_list: All decoders staged for programming.
+ * @commit_list: All decoders programmed for this region's parameters.
+ *
  * @config: HDM decoder program config
  * @config.size: Size of the region determined from LSA or userspace.
  * @config.uuid: The UUID for this region.
@@ -27,6 +30,8 @@ struct cxl_region {
 	struct list_head list;
 	struct resource *res;
 	bool active;
+	struct list_head staged_list;
+	struct list_head commit_list;
 
 	struct {
 		u64 size;

@@ -30,11 +30,55 @@ static void schedule_detach(void *cxlmd)
 	schedule_cxl_memdev_detach(cxlmd);
 }
 
+static int count_decoders(struct device *dev, void *data)
+{
+	if (is_cxl_decoder(dev))
+		(*(int *)data)++;
+
+	return 0;
+}
+
+struct dec_init_ctx {
+	struct cxl_hdm *cxlhdm;
+	int ndx;
+};
+
+static int set_decoders(struct device *dev, void *data)
+{
+	struct cxl_decoder *cxld;
+	struct dec_init_ctx *ctx;
+	struct cxl_hdm *cxlhdm;
+	int dec;
+
+	if (!is_cxl_decoder(dev))
+		return 0;
+
+	cxld = to_cxl_decoder(dev);
+
+	ctx = data;
+
+	cxlhdm = ctx->cxlhdm;
+	dec = ctx->ndx++;
+	cxlhdm->decoders.cxld[dec] = cxld;
+
+	if (cxld->flags & CXL_DECODER_F_ENABLE) {
+		dev_dbg(dev, "Not adding to free decoders\n");
+		return 0;
+	}
+
+	set_bit(dec, cxlhdm->decoders.free_mask);
+
+	dev_dbg(dev, "Adding to free decoder list\n");
+
+	return 0;
+}
+
 static int cxl_port_probe(struct device *dev)
 {
 	struct cxl_port *port = to_cxl_port(dev);
+	int rc, decoder_count = 0;
+	struct dec_init_ctx ctx;
 	struct cxl_hdm *cxlhdm;
-	int rc;
 
 	if (is_cxl_endpoint(port)) {
 		struct cxl_memdev *cxlmd = to_cxl_memdev(port->uport);
@@ -60,6 +104,22 @@ static int cxl_port_probe(struct device *dev)
 		dev_err(dev, "Couldn't enumerate decoders (%d)\n", rc);
 		return rc;
 	}
+
+	device_for_each_child(dev, &decoder_count, count_decoders);
+
+	cxlhdm->decoders.free_mask =
+		devm_bitmap_zalloc(dev, decoder_count, GFP_KERNEL);
+	cxlhdm->decoders.count = decoder_count;
+
+	ctx.cxlhdm = cxlhdm;
+	ctx.ndx = 0;
+	if (device_for_each_child(dev, &ctx, set_decoders))
+		return -ENXIO;
+
+	dev_set_drvdata(dev, cxlhdm);
+
+	dev_dbg(dev, "Setup complete. Free decoders %*pb\n",
+		cxlhdm->decoders.count, &cxlhdm->decoders.free_mask);
 
 	return 0;
 }

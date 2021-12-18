@@ -1212,6 +1212,8 @@ static struct cxl_decoder *cxl_decoder_alloc(struct cxl_port *port,
 	cxld->target_type = CXL_DECODER_EXPANDER;
 	cxld->platform_res = (struct resource)DEFINE_RES_MEM(0, 0);
 
+	INIT_LIST_HEAD(&cxld->region_link);
+
 	ida_init(&cxld->region_ida);
 
 	return cxld;
@@ -1365,6 +1367,75 @@ int cxl_decoder_add(struct cxl_decoder *cxld, int *target_map)
 	return rc;
 }
 EXPORT_SYMBOL_NS_GPL(cxl_decoder_add, CXL);
+
+/**
+ * cxl_get_decoder() - Get an unused decoder from the port.
+ * @port: The port to obtain a decoder from.
+ *
+ * Region programming requires obtaining decoder resources from all ports that
+ * participate in the interleave set. This function shall be used to pull the
+ * decoder resource out of the list of available.
+ *
+ * Context: Process context. Takes and releases the device lock of the port.
+ *
+ * Return: A cxl_decoder that can be used for programming if successful, else a
+ *	   negative error code.
+ */
+struct cxl_decoder *cxl_get_decoder(struct cxl_port *port)
+{
+	struct cxl_hdm *cxlhdm;
+	int dec;
+
+	cxlhdm = dev_get_drvdata(&port->dev);
+	if (dev_WARN_ONCE(&port->dev, !cxlhdm, "No port drvdata\n"))
+		return ERR_PTR(-ENXIO);
+
+	device_lock(&port->dev);
+	dec = find_first_bit(cxlhdm->decoders.free_mask,
+			     cxlhdm->decoders.count);
+	if (dec == cxlhdm->decoders.count) {
+		device_unlock(&port->dev);
+		return ERR_PTR(-ENODEV);
+	}
+
+	clear_bit(dec, cxlhdm->decoders.free_mask);
+	device_unlock(&port->dev);
+
+	return cxlhdm->decoders.cxld[dec];
+}
+EXPORT_SYMBOL_NS_GPL(cxl_get_decoder, CXL);
+
+/**
+ * cxl_put_decoder() - Return an inactive decoder to the port.
+ * @cxld: The decoder being returned.
+ */
+void cxl_put_decoder(struct cxl_decoder *cxld)
+{
+	struct cxl_port *port = to_cxl_port(cxld->dev.parent);
+	struct cxl_hdm *cxlhdm;
+	int i;
+
+	cxlhdm = dev_get_drvdata(&port->dev);
+	if (dev_WARN_ONCE(&port->dev, !cxlhdm, "No port drvdata\n"))
+		return;
+
+	device_lock(&port->dev);
+
+	for (i = 0; i < CXL_DECODER_MAX_INSTANCES; i++) {
+		struct cxl_decoder *d = cxlhdm->decoders.cxld[i];
+
+		if (!d)
+			continue;
+
+		if (d == cxld) {
+			set_bit(i, cxlhdm->decoders.free_mask);
+			break;
+		}
+	}
+
+	device_unlock(&port->dev);
+}
+EXPORT_SYMBOL_NS_GPL(cxl_put_decoder, CXL);
 
 static void cxld_unregister(void *dev)
 {

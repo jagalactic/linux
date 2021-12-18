@@ -440,6 +440,8 @@ struct cxl_region *cxl_alloc_region(struct cxl_decoder *cxld, int id)
 	if (!cxlr)
 		return ERR_PTR(-ENOMEM);
 
+	INIT_LIST_HEAD(&cxlr->staged_list);
+	INIT_LIST_HEAD(&cxlr->commit_list);
 	cxlr->id = id;
 
 	return cxlr;
