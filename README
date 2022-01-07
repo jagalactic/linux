@@ -1,3 +1,74 @@
+
+Micron CXL Kernel Readme
+========================
+
+* This is the "cxl2" kernel from November 2021
+* Security is disabled
+* Raw mailbox ioctl commands are enabled
+* ("normal" mailbox command ioctls also work)
+* There is an example program that issues mailbox commands
+  in the cxl-tools repo at progs/cxl_ioctl.c
+  (see https://bitbucket.micron.com/bbdc/projects/SBUSW/repos/cxl-tools/browse)
+* Note that building cxl components as modules is not working - at least the
+  cxl_pci module (where the mbox interface lives) currently will not compile
+  as a module. This is not related to any Micron patches...
+
+Building
+========
+
+An appropriate config file is checked in as config-cxl2.  To build this
+kernel, move that to ".config" and build.  E.g.:
+
+    cp config-cxl2 .config
+    make [-j24]
+
+
+Installing
+==========
+
+To install on a system or VM:
+
+    make modules_install headers_install install
+
+Important note: You don't have to build this kernel on the system where you
+intend to install it, but the directory that you install it from must be the same
+path as it was built at.  I don't know why this limitation exists.  This might
+force you to need to build the kernel on the target system...
+
+Setting Default Kernel
+======================
+
+    grubby --set-default=/boot/<kernel>
+
+Where <kernel> is the kernel file you want to activate as the default
+(e.g. vmlinuz-5.15.0-rc2-cxl2+)
+
+Debugging
+=========
+
+The driver contains debug messages (added by Micron) to assist in
+trouble shooting the mailbox ioctl interface.
+
+To enable kernel debug messages:
+
+    sudo echo 'file drivers/cxl/pci.c +p'>/sys/kernel/debug/dynamic_debug/control
+
+Tailing Kernel Logs
+===================
+
+To put a "tail" on the kernel log, including cxl-related debug messages
+(if enabled), do this:
+
+    journalctl -k -p 7 -f
+
+To view the kernel log from the previous boot (in case you crashed it trying
+something that didn't work), do this
+
+    journalctl -k -b -1  # and then go to the end of the buffer in "less"
+
+End Micron CXL Notes
+====================
+
 Linux kernel
 ============
 
