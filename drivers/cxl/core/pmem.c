@@ -62,10 +62,16 @@ static int match_nvdimm_bridge(struct device *dev, void *data)
 	return is_cxl_nvdimm_bridge(dev);
 }
 
-struct cxl_nvdimm_bridge *cxl_find_nvdimm_bridge(struct cxl_nvdimm *cxl_nvd)
+/**
+ * cxl_find_nvdimm_bridge() - Find an nvdimm bridge for a given device
+ * @dev: The device to find a bridge for. This device must be in the part of the
+ *	 CXL topology which is being bridged.
+ *
+ * Return: bridge device that hosts cxl_nvdimm objects if found, else NULL.
+ */
+struct cxl_nvdimm_bridge *cxl_find_nvdimm_bridge(struct device *dev)
 {
-	struct cxl_port *port = find_cxl_root(&cxl_nvd->dev);
-	struct device *dev;
+	struct cxl_port *port = find_cxl_root(dev);
 
 	if (!port)
 		return NULL;
