@@ -99,7 +99,8 @@ config CXL_PORT
 	tristate
 
 config CXL_REGION
-	default CXL_PORT
+	depends on CXL_PMEM
+	default CXL_BUS
 	tristate
 
 endif

@@ -220,6 +220,22 @@ struct cxl_nvdimm *to_cxl_nvdimm(struct device *dev)
 }
 EXPORT_SYMBOL_NS_GPL(to_cxl_nvdimm, CXL);
 
+static int match_cxl_nvdimm(struct device *dev, void *data)
+{
+	return is_cxl_nvdimm(dev);
+}
+
+struct cxl_nvdimm *cxl_find_nvdimm(struct cxl_memdev *cxlmd)
+{
+	struct device *dev;
+
+	dev = device_find_child(&cxlmd->dev, NULL, match_cxl_nvdimm);
+	if (!dev)
+		return NULL;
+	return to_cxl_nvdimm(dev);
+}
+EXPORT_SYMBOL_NS_GPL(cxl_find_nvdimm, CXL);
+
 static struct cxl_nvdimm *cxl_nvdimm_alloc(struct cxl_memdev *cxlmd)
 {
 	struct cxl_nvdimm *cxl_nvd;

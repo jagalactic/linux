@@ -708,6 +708,58 @@ static int bind_region(struct cxl_region *cxlr)
 	return rc;
 }
 
+static int connect_to_libnvdimm(struct cxl_region *region)
+{
+	struct nd_region_desc ndr_desc;
+	struct cxl_nvdimm_bridge *nvb;
+	struct nd_region *ndr;
+	int rc = 0;
+
+	nvb = cxl_find_nvdimm_bridge(&region->config.targets[0]->dev);
+	if (!nvb) {
+		dev_dbg(&region->dev, "Couldn't find nvdimm bridge\n");
+		return -ENODEV;
+	}
+
+	device_lock(&nvb->dev);
+	if (!nvb->nvdimm_bus) {
+		dev_dbg(&nvb->dev, "Couldn't find nvdimm bridge's bus\n");
+		rc = -ENXIO;
+		goto out;
+	}
+
+	memset(&ndr_desc, 0, sizeof(ndr_desc));
+
+	ndr_desc.res = region->res;
+
+	ndr_desc.numa_node = memory_add_physaddr_to_nid(region->res->start);
+	ndr_desc.target_node = phys_to_target_node(region->res->start);
+	if (ndr_desc.numa_node == NUMA_NO_NODE) {
+		ndr_desc.numa_node =
+			memory_add_physaddr_to_nid(region->res->start);
+		dev_info(&region->dev,
+			 "changing numa node from %d to %d for CXL region %pR",
+			 NUMA_NO_NODE, ndr_desc.numa_node, region->res);
+	}
+	if (ndr_desc.target_node == NUMA_NO_NODE) {
+		ndr_desc.target_node = ndr_desc.numa_node;
+		dev_info(&region->dev,
+			 "changing target node from %d to %d for CXL region %pR",
+			 NUMA_NO_NODE, ndr_desc.target_node, region->res);
+	}
+
+	ndr = nvdimm_pmem_region_create(nvb->nvdimm_bus, &ndr_desc);
+	if (IS_ERR(ndr))
+		rc = PTR_ERR(ndr);
+	else
+		dev_set_drvdata(&region->dev, ndr);
+
+out:
+	device_unlock(&nvb->dev);
+	put_device(&nvb->dev);
+	return rc;
+}
+
 static void region_unregister(void *dev)
 {
 	struct cxl_region *region = to_cxl_region(dev);
@@ -788,6 +840,12 @@ static int cxl_region_probe(struct device *dev)
 		if (dev_WARN_ONCE(dev, !list_empty(&cxlr->commit_list),
 				  "Region bind failed to cleanup committed decoders\n"))
 			region_unregister(&cxlr->dev);
+		return ret;
+	}
+
+	ret = connect_to_libnvdimm(cxlr);
+	if (ret) {
+		region_unregister(dev);
 		return ret;
 	}
 
