@@ -359,6 +359,23 @@ static bool has_switch(const struct cxl_region *cxlr)
 	return false;
 }
 
+static bool has_multi_switch(const struct cxl_region *cxlr)
+{
+	struct cxl_memdev *ep;
+	int i;
+
+	for_each_cxl_endpoint(ep, cxlr, i)
+		if (ep->port->depth > 3)
+			return true;
+
+	return false;
+}
+
+static struct cxl_port *get_switch(struct cxl_memdev *ep)
+{
+	return to_cxl_port(ep->port->dev.parent);
+}
+
 static struct cxl_decoder *get_decoder(struct cxl_region *cxlr,
 				       struct cxl_port *p)
 {
@@ -409,6 +426,8 @@ static bool region_hb_rp_config_valid(struct cxl_region *cxlr,
 				      const struct cxl_decoder *rootd,
 				      bool state_update)
 {
+	const int region_ig = cxl_to_ig(cxlr->config.interleave_granularity);
+	const int region_eniw = cxl_to_eniw(cxlr->config.interleave_ways);
 	const int num_root_ports = get_num_root_ports(cxlr);
 	struct cxl_port *hbs[CXL_DECODER_MAX_INTERLEAVE];
 	struct cxl_decoder *cxld, *c;
@@ -416,8 +435,12 @@ static bool region_hb_rp_config_valid(struct cxl_region *cxlr,
 
 	hb_count = get_unique_hostbridges(cxlr, hbs);
 
-	/* TODO: Switch support */
-	if (has_switch(cxlr))
+	/* TODO: support multiple levels of switches */
+	if (has_multi_switch(cxlr))
+		return false;
+
+	/* TODO: x3 interleave for switches is hard. */
+	if (has_switch(cxlr) && !is_power_of_2(region_ways(cxlr)))
 		return false;
 
 	/*
@@ -470,8 +493,14 @@ static bool region_hb_rp_config_valid(struct cxl_region *cxlr,
 		list_for_each_entry(rp, &hb->dports, list) {
 			struct cxl_memdev *ep;
 			int port_grouping = -1;
+			int target_ndx;
 
 			for_each_cxl_endpoint_hb(ep, cxlr, hb, idx) {
+				struct cxl_decoder *switch_cxld;
+				struct cxl_dport *target;
+				struct cxl_port *switch_port;
+				bool found = false;
+
 				if (get_rp(ep) != rp)
 					continue;
 
@@ -499,6 +528,34 @@ static bool region_hb_rp_config_valid(struct cxl_region *cxlr,
 
 				cxld->interleave_ways++;
 				cxld->target[port_grouping] = get_rp(ep);
+
+				/*
+				 * At least one switch is connected here if the endpoint
+				 * has a depth > 2
+				 */
+				if (ep->port->depth == 2)
+					continue;
+
+				/* Check the staged list to see if this
+				 * port has already been added
+				 */
+				switch_port = get_switch(ep);
+				list_for_each_entry(switch_cxld, &cxlr->staged_list, region_link) {
+					if (to_cxl_port(switch_cxld->dev.parent) == switch_port)
+						found = true;
+				}
+
+				if (found) {
+					target = cxl_find_dport_by_dev(switch_port, ep->dev.parent->parent);
+					switch_cxld->target[target_ndx++] = target;
+					continue;
+				}
+
+				target_ndx = 0;
+
+				switch_cxld = get_decoder(cxlr, switch_port);
+				switch_cxld->interleave_ways++;
+				switch_cxld->interleave_granularity = cxl_to_ways(region_ig + region_eniw);
 			}
 		}
 	}

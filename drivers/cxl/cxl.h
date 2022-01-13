@@ -96,6 +96,11 @@ static inline u8 cxl_to_ig(u16 g)
 	return ilog2(g) - 8;
 }
 
+static inline int cxl_to_ways(u8 ways)
+{
+	return 1 << ways;
+}
+
 static inline bool cxl_is_interleave_ways_valid(int iw)
 {
 	switch (iw) {
