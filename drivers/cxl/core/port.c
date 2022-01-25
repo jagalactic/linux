@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /* Copyright(c) 2020 Intel Corporation. All rights reserved. */
 #include <linux/io-64-nonatomic-lo-hi.h>
+#include <linux/workqueue.h>
 #include <linux/device.h>
 #include <linux/module.h>
 #include <linux/pci.h>
@@ -46,6 +47,8 @@ static int cxl_device_id(struct device *dev)
 			return CXL_DEVICE_ROOT;
 		return CXL_DEVICE_PORT;
 	}
+	if (dev->type == &cxl_memdev_type)
+		return CXL_DEVICE_MEMORY_EXPANDER;
 	return 0;
 }
 
@@ -320,8 +323,10 @@ static void unregister_port(void *_port)
 {
 	struct cxl_port *port = _port;
 
-	if (!is_cxl_root(port))
+	if (!is_cxl_root(port)) {
 		device_lock_assert(port->dev.parent);
+		port->uport = NULL;
+	}
 
 	device_unregister(&port->dev);
 }
@@ -412,7 +417,9 @@ struct cxl_port *devm_cxl_add_port(struct device *host, struct device *uport,
 	if (parent_port)
 		port->depth = parent_port->depth + 1;
 	dev = &port->dev;
-	if (parent_port)
+	if (is_cxl_memdev(uport))
+		rc = dev_set_name(dev, "endpoint%d", port->id);
+	else if (parent_port)
 		rc = dev_set_name(dev, "port%d", port->id);
 	else
 		rc = dev_set_name(dev, "root%d", port->id);
@@ -774,6 +781,38 @@ static struct device *grandparent(struct device *dev)
 		return dev->parent->parent;
 	return NULL;
 }
+
+static void delete_endpoint(void *data)
+{
+	struct cxl_memdev *cxlmd = data;
+	struct cxl_port *endpoint = dev_get_drvdata(&cxlmd->dev);
+	struct cxl_port *parent_port;
+	struct device *parent;
+
+	parent_port = cxl_mem_find_port(cxlmd);
+	if (!parent_port)
+		return;
+	parent = &parent_port->dev;
+
+	cxl_device_lock(parent);
+	if (parent->driver && endpoint->uport) {
+		devm_release_action(parent, cxl_unlink_uport, endpoint);
+		devm_release_action(parent, unregister_port, endpoint);
+	}
+	cxl_device_unlock(parent);
+	put_device(parent);
+	put_device(&endpoint->dev);
+}
+
+int cxl_endpoint_autoremove(struct cxl_memdev *cxlmd, struct cxl_port *endpoint)
+{
+	struct device *dev = &cxlmd->dev;
+
+	get_device(&endpoint->dev);
+	dev_set_drvdata(dev, endpoint);
+	return devm_add_action_or_reset(dev, delete_endpoint, cxlmd);
+}
+EXPORT_SYMBOL_NS_GPL(cxl_endpoint_autoremove, CXL);
 
 static void delete_switch_port(struct cxl_memdev *cxlmd, struct cxl_port *port,
 			       struct list_head *dports)
@@ -1325,6 +1364,33 @@ struct bus_type cxl_bus_type = {
 };
 EXPORT_SYMBOL_NS_GPL(cxl_bus_type, CXL);
 
+static struct workqueue_struct *cxl_bus_wq;
+
+int cxl_bus_rescan(void)
+{
+	return bus_rescan_devices(&cxl_bus_type);
+}
+EXPORT_SYMBOL_NS_GPL(cxl_bus_rescan, CXL);
+
+bool schedule_cxl_memdev_detach(struct cxl_memdev *cxlmd)
+{
+	return queue_work(cxl_bus_wq, &cxlmd->detach_work);
+}
+EXPORT_SYMBOL_NS_GPL(schedule_cxl_memdev_detach, CXL);
+
+/* for user tooling to ensure port disable work has completed */
+static ssize_t flush_store(struct bus_type *bus, const char *buf, size_t count)
+{
+	if (sysfs_streq(buf, "1")) {
+		flush_workqueue(cxl_bus_wq);
+		return count;
+	}
+
+	return -EINVAL;
+}
+
+static BUS_ATTR_WO(flush);
+
 static __init int cxl_core_init(void)
 {
 	int rc;
@@ -1335,12 +1401,27 @@ static __init int cxl_core_init(void)
 	if (rc)
 		return rc;
 
+	cxl_bus_wq = alloc_ordered_workqueue("cxl_port", 0);
+	if (!cxl_bus_wq) {
+		rc = -ENOMEM;
+		goto err_wq;
+	}
+
 	rc = bus_register(&cxl_bus_type);
 	if (rc)
-		goto err;
+		goto err_bus;
+
+	rc = bus_create_file(&cxl_bus_type, &bus_attr_flush);
+	if (rc)
+		goto err_flush;
+
 	return 0;
 
-err:
+err_flush:
+	bus_unregister(&cxl_bus_type);
+err_bus:
+	destroy_workqueue(cxl_bus_wq);
+err_wq:
 	cxl_memdev_exit();
 	cxl_mbox_exit();
 	return rc;
@@ -1348,7 +1429,9 @@ err:
 
 static void cxl_core_exit(void)
 {
+	bus_remove_file(&cxl_bus_type, &bus_attr_flush);
 	bus_unregister(&cxl_bus_type);
+	destroy_workqueue(cxl_bus_wq);
 	cxl_memdev_exit();
 	cxl_mbox_exit();
 }

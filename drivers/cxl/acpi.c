@@ -314,7 +314,8 @@ static int cxl_acpi_probe(struct platform_device *pdev)
 	if (rc < 0)
 		return rc;
 
-	return 0;
+	/* In case PCI is scanned before ACPI re-trigger memdev attach */
+	return cxl_bus_rescan();
 }
 
 static const struct acpi_device_id cxl_acpi_ids[] = {
@@ -335,3 +336,4 @@ module_platform_driver(cxl_acpi_driver);
 MODULE_LICENSE("GPL v2");
 MODULE_IMPORT_NS(CXL);
 MODULE_IMPORT_NS(ACPI);
+MODULE_SOFTDEP("pre: cxl_port");
