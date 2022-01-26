@@ -133,21 +133,14 @@ static int to_interleave_granularity(u32 ctrl)
 {
 	int val = FIELD_GET(CXL_HDM_DECODER0_CTRL_IG_MASK, ctrl);
 
-	return 256 << val;
+	return cxl_to_interleave_granularity(val);
 }
 
 static int to_interleave_ways(u32 ctrl)
 {
 	int val = FIELD_GET(CXL_HDM_DECODER0_CTRL_IW_MASK, ctrl);
 
-	switch (val) {
-	case 0 ... 4:
-		return 1 << val;
-	case 8 ... 10:
-		return 3 << (val - 8);
-	default:
-		return 0;
-	}
+	return cxl_to_interleave_ways(val);
 }
 
 static int init_hdm_decoder(struct cxl_port *port, struct cxl_decoder *cxld,
