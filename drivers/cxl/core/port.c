@@ -1211,6 +1211,7 @@ static struct cxl_decoder *__cxl_decoder_alloc(struct cxl_port *port,
 		cxled = kzalloc(sizeof(*cxled), GFP_KERNEL);
 		if (!cxled)
 			return NULL;
+		cxled->range = (struct range){ 0, -1 };
 		cxld = &cxled->base;
 	} else if (is_cxl_root(port)) {
 		struct cxl_root_decoder *cxlrd;

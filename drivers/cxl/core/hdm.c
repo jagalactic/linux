@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /* Copyright(c) 2022 Intel Corporation. All rights reserved. */
 #include <linux/io-64-nonatomic-hi-lo.h>
+#include <linux/genalloc.h>
 #include <linux/device.h>
 #include <linux/delay.h>
 
@@ -204,8 +205,11 @@ static int init_hdm_decoder(struct cxl_port *port, struct cxl_decoder *cxld,
 	else
 		cxld->target_type = CXL_DECODER_ACCELERATOR;
 
-	if (is_endpoint_decoder(&cxld->dev))
+	if (is_endpoint_decoder(&cxld->dev)) {
+		to_cxl_endpoint_decoder(cxld)->skip =
+			ioread64_hi_lo(hdm + CXL_HDM_DECODER0_TL_LOW(which));
 		return 0;
+	}
 
 	target_list.value =
 		ioread64_hi_lo(hdm + CXL_HDM_DECODER0_TL_LOW(which));
@@ -224,6 +228,7 @@ int devm_cxl_enumerate_decoders(struct cxl_hdm *cxlhdm)
 	void __iomem *hdm = cxlhdm->regs.hdm_decoder;
 	struct cxl_port *port = cxlhdm->port;
 	int i, committed, failed;
+	u64 base = 0;
 	u32 ctrl;
 
 	/*
@@ -246,6 +251,7 @@ int devm_cxl_enumerate_decoders(struct cxl_hdm *cxlhdm)
 	for (i = 0, failed = 0; i < cxlhdm->decoder_count; i++) {
 		int target_map[CXL_DECODER_MAX_INTERLEAVE] = { 0 };
 		int rc, target_count = cxlhdm->target_count;
+		struct cxl_endpoint_decoder *cxled;
 		struct cxl_decoder *cxld;
 
 		if (is_cxl_endpoint(port))
@@ -273,6 +279,24 @@ int devm_cxl_enumerate_decoders(struct cxl_hdm *cxlhdm)
 				 "Failed to add decoder to port\n");
 			return rc;
 		}
+
+		if (!is_cxl_endpoint(port))
+			continue;
+
+		cxled = to_cxl_endpoint_decoder(cxld);
+		cxled->drange = (struct range) {
+			.start = base,
+			.end = range_len(&cxled->range) - 1,
+		};
+
+		if (!range_len(&cxled->range))
+			continue;
+
+		dev_dbg(&cxld->dev,
+			"Enumerated decoder with DPA range %#llx-%#llx\n", base,
+			base + range_len(&cxled->drange));
+		base += cxled->skip + range_len(&cxled->range);
+		port->last_cxled = cxled;
 	}
 
 	if (failed == cxlhdm->decoder_count) {

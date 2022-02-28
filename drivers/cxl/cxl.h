@@ -229,10 +229,14 @@ struct cxl_decoder {
  * struct cxl_endpoint_decoder - An decoder residing in a CXL endpoint.
  * @base: Base class decoder
  * @range: Host physical address space consumed by this decoder.
+ * @drange: Device physical address space this decoder is using
+ * @skip: The skip count as specified in the CXL specification.
  */
 struct cxl_endpoint_decoder {
 	struct cxl_decoder base;
 	struct range range;
+	struct range drange;
+	u64 skip;
 };
 
 /**
@@ -252,11 +256,15 @@ struct cxl_switch_decoder {
  * @base: Base class decoder
  * @res: host address space owned by this decoder
  * @targets: Downstream targets (ie. hostbridges).
+ * @next_region_id: The pre-cached next region id.
+ * @id_lock: Protects next_region_id
  */
 struct cxl_root_decoder {
 	struct cxl_decoder base;
 	struct resource res;
 	struct cxl_decoder_targets *targets;
+	int next_region_id;
+	struct mutex id_lock; /* synchronizes access to next_region_id */
 };
 
 #define _to_cxl_decoder(x)                                                     \
@@ -316,6 +324,7 @@ struct cxl_nvdimm {
  * @capacity: How much total storage the media can hold (endpoint only)
  * @pmem_offset: Partition dividing volatile, [0, pmem_offset -1 ], and persistent
  *		 [pmem_offset, capacity - 1] addresses.
+ * @last_cxled: Last active decoder doing decode (endpoint only)
  */
 struct cxl_port {
 	struct device dev;
@@ -330,6 +339,7 @@ struct cxl_port {
 
 	u64 capacity;
 	u64 pmem_offset;
+	struct cxl_endpoint_decoder *last_cxled;
 };
 
 /**
