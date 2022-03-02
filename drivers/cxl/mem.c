@@ -50,9 +50,12 @@ static int create_endpoint(struct cxl_memdev *cxlmd,
 {
 	struct cxl_dev_state *cxlds = cxlmd->cxlds;
 	struct cxl_port *endpoint;
+	u64 partition = range_len(&cxlds->ram_range);
+	u64 size = range_len(&cxlds->ram_range) + range_len(&cxlds->pmem_range);
 
-	endpoint = devm_cxl_add_port(&parent_port->dev, &cxlmd->dev,
-				     cxlds->component_reg_phys, parent_port);
+	endpoint = devm_cxl_add_endpoint_port(&parent_port->dev, &cxlmd->dev,
+					      cxlds->component_reg_phys, size,
+					      partition, parent_port);
 	if (IS_ERR(endpoint))
 		return PTR_ERR(endpoint);
 

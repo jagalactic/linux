@@ -313,6 +313,9 @@ struct cxl_nvdimm {
  * @component_reg_phys: component register capability base address (optional)
  * @dead: last ep has been removed, force port re-creation
  * @depth: How deep this port is relative to the root. depth 0 is the root.
+ * @capacity: How much total storage the media can hold (endpoint only)
+ * @pmem_offset: Partition dividing volatile, [0, pmem_offset -1 ], and persistent
+ *		 [pmem_offset, capacity - 1] addresses.
  */
 struct cxl_port {
 	struct device dev;
@@ -324,6 +327,9 @@ struct cxl_port {
 	resource_size_t component_reg_phys;
 	bool dead;
 	unsigned int depth;
+
+	u64 capacity;
+	u64 pmem_offset;
 };
 
 /**
@@ -372,6 +378,11 @@ struct pci_bus *cxl_port_to_pci_bus(struct cxl_port *port);
 struct cxl_port *devm_cxl_add_port(struct device *host, struct device *uport,
 				   resource_size_t component_reg_phys,
 				   struct cxl_port *parent_port);
+struct cxl_port *devm_cxl_add_endpoint_port(struct device *host,
+					    struct device *uport,
+					    resource_size_t component_reg_phys,
+					    u64 capacity, u64 pmem_offset,
+					    struct cxl_port *parent_port);
 struct cxl_port *find_cxl_root(struct device *dev);
 int devm_cxl_enumerate_ports(struct cxl_memdev *cxlmd);
 int cxl_bus_rescan(void);

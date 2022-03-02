@@ -2,6 +2,7 @@
 /* Copyright(c) 2020 Intel Corporation. All rights reserved. */
 #include <linux/io-64-nonatomic-lo-hi.h>
 #include <linux/workqueue.h>
+#include <linux/genalloc.h>
 #include <linux/device.h>
 #include <linux/module.h>
 #include <linux/pci.h>
@@ -495,6 +496,24 @@ err:
 	return ERR_PTR(rc);
 }
 EXPORT_SYMBOL_NS_GPL(devm_cxl_add_port, CXL);
+
+struct cxl_port *devm_cxl_add_endpoint_port(struct device *host,
+					    struct device *uport,
+					    resource_size_t component_reg_phys,
+					    u64 capacity, u64 pmem_offset,
+					    struct cxl_port *parent_port)
+{
+	struct cxl_port *ep =
+		devm_cxl_add_port(host, uport, component_reg_phys, parent_port);
+	if (IS_ERR(ep) || !capacity)
+		return ep;
+
+	ep->capacity = capacity;
+	ep->pmem_offset = pmem_offset;
+
+	return ep;
+}
+EXPORT_SYMBOL_NS_GPL(devm_cxl_add_endpoint_port, CXL);
 
 struct pci_bus *cxl_port_to_pci_bus(struct cxl_port *port)
 {
