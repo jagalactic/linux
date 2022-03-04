@@ -454,17 +454,14 @@ static int mock_cxl_enumerate_decoders(struct cxl_hdm *cxlhdm)
 		if (target_count)
 			cxld = cxl_switch_decoder_alloc(port, target_count);
 		else
-			cxld = cxl_endpoint_decoder_alloc(port);
+			cxld = &cxl_endpoint_decoder_alloc(port)->base;
 		if (IS_ERR(cxld)) {
 			dev_warn(&port->dev,
 				 "Failed to allocate the decoder\n");
 			return PTR_ERR(cxld);
 		}
 
-		cxld->decoder_range = (struct range) {
-			.start = 0,
-			.end = -1,
-		};
+		cxl_set_decoder_extent(cxld, 0, 0);
 
 		cxld->flags = CXL_DECODER_F_ENABLE;
 		cxld->interleave_ways = min_not_zero(target_count, 1);

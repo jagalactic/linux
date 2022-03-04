@@ -6,6 +6,7 @@
 
 #include "cxlmem.h"
 #include "core.h"
+#include "cxl.h"
 
 /**
  * DOC: cxl core hdm
@@ -172,10 +173,16 @@ static int init_hdm_decoder(struct cxl_port *port, struct cxl_decoder *cxld,
 		return -ENXIO;
 	}
 
-	cxld->decoder_range = (struct range) {
-		.start = base,
-		.end = base + size - 1,
-	};
+	if (is_endpoint_decoder(&cxld->dev))
+		to_cxl_endpoint_decoder(cxld)->range = (struct range) {
+			.start = base,
+			.end = base + size - 1,
+		};
+	else
+		to_cxl_switch_decoder(cxld)->range = (struct range) {
+			.start = base,
+			.end = base + size - 1,
+		};
 
 	/* switch decoders are always enabled if committed */
 	if (ctrl & CXL_HDM_DECODER0_CTRL_COMMITTED) {
@@ -242,7 +249,7 @@ int devm_cxl_enumerate_decoders(struct cxl_hdm *cxlhdm)
 		struct cxl_decoder *cxld;
 
 		if (is_cxl_endpoint(port))
-			cxld = cxl_endpoint_decoder_alloc(port);
+			cxld = &cxl_endpoint_decoder_alloc(port)->base;
 		else
 			cxld = cxl_switch_decoder_alloc(port, target_count);
 		if (IS_ERR(cxld)) {

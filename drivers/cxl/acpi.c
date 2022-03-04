@@ -108,8 +108,10 @@ static int cxl_parse_cfmws(union acpi_subtable_headers *header, void *arg,
 
 	cxld->flags = cfmws_to_decoder_flags(cfmws->restrictions);
 	cxld->target_type = CXL_DECODER_EXPANDER;
-	cxld->platform_res = (struct resource)DEFINE_RES_MEM(cfmws->base_hpa,
-							     cfmws->window_size);
+	to_cxl_root_decoder(cxld)->res = (struct resource) {
+		.start = cfmws->base_hpa,
+		.end = cfmws->base_hpa + cfmws->window_size - 1,
+	};
 	cxld->interleave_ways = CFMWS_INTERLEAVE_WAYS(cfmws);
 	cxld->interleave_granularity = CFMWS_INTERLEAVE_GRANULARITY(cfmws);
 
@@ -120,12 +122,12 @@ static int cxl_parse_cfmws(union acpi_subtable_headers *header, void *arg,
 		rc = cxl_decoder_autoremove(dev, cxld);
 	if (rc) {
 		dev_err(dev, "Failed to add decoder for %pr\n",
-			&cxld->platform_res);
+			&to_cxl_root_decoder(cxld)->res);
 		return 0;
 	}
 	dev_dbg(dev, "add: %s node: %d range %pr\n", dev_name(&cxld->dev),
-		phys_to_target_node(cxld->platform_res.start),
-		&cxld->platform_res);
+		phys_to_target_node(to_cxl_root_decoder(cxld)->res.start),
+		&to_cxl_root_decoder(cxld)->res);
 
 	return 0;
 }

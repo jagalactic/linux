@@ -194,6 +194,18 @@ enum cxl_decoder_type {
 #define CXL_DECODER_MAX_INTERLEAVE 16
 
 /**
+ * struct cxl_decoder_targets - Target information for root and switch decoders.
+ * @target_lock: coordinate coherent reads of the target list
+ * @nr_targets: number of elements in @target
+ * @target: active ordered target list in current decoder configuration
+ */
+struct cxl_decoder_targets {
+	seqlock_t target_lock;
+	int nr_targets;
+	struct cxl_dport *target[];
+};
+
+/**
  * struct cxl_decoder - CXL address range decode configuration
  * @dev: this decoder's device
  * @id: kernel device name id
@@ -203,26 +215,60 @@ enum cxl_decoder_type {
  * @interleave_granularity: data stride per dport
  * @target_type: accelerator vs expander (type2 vs type3) selector
  * @flags: memory type capabilities and locking
- * @target_lock: coordinate coherent reads of the target list
- * @nr_targets: number of elements in @target
- * @target: active ordered target list in current decoder configuration
  */
 struct cxl_decoder {
 	struct device dev;
 	int id;
-	union {
-		struct resource platform_res;
-		struct range decoder_range;
-	};
 	int interleave_ways;
 	int interleave_granularity;
 	enum cxl_decoder_type target_type;
 	unsigned long flags;
-	seqlock_t target_lock;
-	int nr_targets;
-	struct cxl_dport *target[];
 };
 
+/**
+ * struct cxl_endpoint_decoder - An decoder residing in a CXL endpoint.
+ * @base: Base class decoder
+ * @range: Host physical address space consumed by this decoder.
+ */
+struct cxl_endpoint_decoder {
+	struct cxl_decoder base;
+	struct range range;
+};
+
+/**
+ * struct cxl_switch_decoder - A decoder in a switch or hostbridge.
+ * @base: Base class decoder
+ * @range: Host physical address space consumed by this decoder.
+ * @targets: Downstream targets for this switch.
+ */
+struct cxl_switch_decoder {
+	struct cxl_decoder base;
+	struct range range;
+	struct cxl_decoder_targets *targets;
+};
+
+/**
+ * struct cxl_root_decoder - A toplevel/platform decoder
+ * @base: Base class decoder
+ * @res: host address space owned by this decoder
+ * @targets: Downstream targets (ie. hostbridges).
+ */
+struct cxl_root_decoder {
+	struct cxl_decoder base;
+	struct resource res;
+	struct cxl_decoder_targets *targets;
+};
+
+#define _to_cxl_decoder(x)                                                     \
+	static inline struct cxl_##x##_decoder *to_cxl_##x##_decoder(          \
+		struct cxl_decoder *cxld)                                      \
+	{                                                                      \
+		return container_of(cxld, struct cxl_##x##_decoder, base);     \
+	}
+
+_to_cxl_decoder(root)
+_to_cxl_decoder(switch)
+_to_cxl_decoder(endpoint)
 
 /**
  * enum cxl_nvdimm_brige_state - state machine for managing bus rescans
@@ -347,10 +393,21 @@ struct cxl_decoder *cxl_root_decoder_alloc(struct cxl_port *port,
 struct cxl_decoder *cxl_switch_decoder_alloc(struct cxl_port *port,
 					     unsigned int nr_targets);
 int cxl_decoder_add(struct cxl_decoder *cxld, int *target_map);
-struct cxl_decoder *cxl_endpoint_decoder_alloc(struct cxl_port *port);
+struct cxl_endpoint_decoder *cxl_endpoint_decoder_alloc(struct cxl_port *port);
 int cxl_decoder_add_locked(struct cxl_decoder *cxld, int *target_map);
 int cxl_decoder_autoremove(struct device *host, struct cxl_decoder *cxld);
 int cxl_endpoint_autoremove(struct cxl_memdev *cxlmd, struct cxl_port *endpoint);
+
+static inline struct cxl_decoder_targets *
+cxl_get_decoder_targets(struct cxl_decoder *cxld)
+{
+	if (is_root_decoder(&cxld->dev))
+		return to_cxl_root_decoder(cxld)->targets;
+	else if (is_endpoint_decoder(&cxld->dev))
+		return NULL;
+	else
+		return to_cxl_switch_decoder(cxld)->targets;
+}
 
 struct cxl_hdm;
 struct cxl_hdm *devm_cxl_setup_hdm(struct cxl_port *port);
