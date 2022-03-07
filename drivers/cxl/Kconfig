@@ -95,7 +95,8 @@ config CXL_MEM
 	  If unsure say 'm'.
 
 config CXL_PORT
-	default CXL_BUS
 	tristate
+	default CXL_BUS
+	select DEVICE_PRIVATE
 
 endif

@@ -231,12 +231,16 @@ struct cxl_decoder {
  * @range: Host physical address space consumed by this decoder.
  * @drange: Device physical address space this decoder is using
  * @skip: The skip count as specified in the CXL specification.
+ * @res_lock: Synchronize device's resource usage
+ * @volatil: Configuration param. Decoder target is non-persistent mem
  */
 struct cxl_endpoint_decoder {
 	struct cxl_decoder base;
 	struct range range;
 	struct range drange;
 	u64 skip;
+	struct mutex res_lock; /* sync access to decoder's resource */
+	bool volatil;
 };
 
 /**
@@ -325,6 +329,7 @@ struct cxl_nvdimm {
  * @pmem_offset: Partition dividing volatile, [0, pmem_offset -1 ], and persistent
  *		 [pmem_offset, capacity - 1] addresses.
  * @last_cxled: Last active decoder doing decode (endpoint only)
+ * @media_lock: Synchronizes use of allocation of media (endpoint only)
  */
 struct cxl_port {
 	struct device dev;
@@ -340,6 +345,7 @@ struct cxl_port {
 	u64 capacity;
 	u64 pmem_offset;
 	struct cxl_endpoint_decoder *last_cxled;
+	struct mutex media_lock; /* sync access to media allocator */
 };
 
 /**

@@ -4,6 +4,7 @@
 #include <linux/workqueue.h>
 #include <linux/genalloc.h>
 #include <linux/device.h>
+#include <linux/ioport.h>
 #include <linux/module.h>
 #include <linux/pci.h>
 #include <linux/slab.h>
@@ -96,13 +97,150 @@ static ssize_t size_show(struct device *dev, struct device_attribute *attr,
 	if (is_root_decoder(dev))
 		size = resource_size(&to_cxl_root_decoder(cxld)->res);
 	else if (is_endpoint_decoder(dev))
-		size = range_len(&to_cxl_endpoint_decoder(cxld)->range);
+		size = range_len(&to_cxl_endpoint_decoder(cxld)->drange);
 	else
 		size = range_len(&to_cxl_switch_decoder(cxld)->range);
 
 	return sysfs_emit(buf, "%#llx\n", size);
+};
+
+static struct cxl_endpoint_decoder *
+get_prev_decoder(struct cxl_endpoint_decoder *cxled)
+{
+	struct cxl_port *port = to_cxl_port(cxled->base.dev.parent);
+	struct device *cxldd;
+	char *name;
+
+	if (cxled->base.id == 0)
+		return NULL;
+
+	name = kasprintf(GFP_KERNEL, "decoder%u.%u", port->id, cxled->base.id);
+	if (!name)
+		return ERR_PTR(-ENOMEM);
+
+	cxldd = device_find_child_by_name(&port->dev, name);
+	kfree(name);
+	if (cxldd) {
+		struct cxl_decoder *cxld = to_cxl_decoder(cxldd);
+
+		if (dev_WARN_ONCE(&port->dev,
+				  (cxld->flags & CXL_DECODER_F_ENABLE) == 0,
+				  "%s should be enabled\n",
+				  dev_name(&cxld->dev)))
+			return NULL;
+		return to_cxl_endpoint_decoder(cxld);
+	}
+
+	return NULL;
 }
-static DEVICE_ATTR_RO(size);
+
+static ssize_t size_store(struct device *dev, struct device_attribute *attr,
+			  const char *buf, size_t len)
+{
+	struct cxl_decoder *cxld = to_cxl_decoder(dev);
+	struct cxl_endpoint_decoder *cxled = to_cxl_endpoint_decoder(cxld);
+	struct cxl_port *port = to_cxl_port(cxled->base.dev.parent);
+	struct cxl_endpoint_decoder *prev = get_prev_decoder(cxled);
+	u64 size, dpa_base = 0;
+	int rc;
+
+	rc = kstrtou64(buf, 0, &size);
+	if (rc)
+		return rc;
+
+	if (size % SZ_256M)
+		return -EINVAL;
+
+	rc = mutex_lock_interruptible(&cxled->res_lock);
+	if (rc)
+		return rc;
+
+	/* No change */
+	if (range_len(&cxled->range) == size)
+		goto out;
+
+	rc = mutex_lock_interruptible(&port->media_lock);
+	if (rc)
+		goto out;
+
+	/* Extent was previously set */
+	if (port->last_cxled == cxled) {
+		if (size == range_len(&cxled->drange)) {
+			mutex_unlock(&port->media_lock);
+			goto out;
+		}
+
+		if (!size) {
+			dev_dbg(dev,
+				"freeing previous reservation %#llx-%#llx\n",
+				cxled->drange.start, cxled->drange.end);
+			port->last_cxled = prev;
+			mutex_unlock(&port->media_lock);
+			goto out;
+		}
+	}
+
+	if (prev)
+		dpa_base = port->last_cxled->drange.end + 1;
+
+	if ((dpa_base + size) > port->capacity)
+		rc = -ENOSPC;
+	else
+		port->last_cxled = cxled;
+
+	mutex_unlock(&port->media_lock);
+	if (rc)
+		goto out;
+
+	cxled->drange = (struct range) {
+		.start = dpa_base,
+		.end = dpa_base + size - 1
+	};
+
+	dev_dbg(dev, "Allocated %#llx-%#llx from media\n", cxled->drange.start,
+		cxled->drange.end);
+
+out:
+	mutex_unlock(&cxled->res_lock);
+	return rc ? rc : len;
+}
+static DEVICE_ATTR_RW(size);
+
+static ssize_t volatile_show(struct device *dev, struct device_attribute *attr,
+			     char *buf)
+{
+	struct cxl_decoder *cxld = to_cxl_decoder(dev);
+	struct cxl_endpoint_decoder *cxled = to_cxl_endpoint_decoder(cxld);
+
+	return sysfs_emit(buf, "%u\n", cxled->volatil);
+}
+
+static ssize_t volatile_store(struct device *dev, struct device_attribute *attr,
+			      const char *buf, size_t len)
+{
+	struct cxl_decoder *cxld = to_cxl_decoder(dev);
+	struct cxl_endpoint_decoder *cxled = to_cxl_endpoint_decoder(cxld);
+	bool p;
+	int rc;
+
+	rc = kstrtobool(buf, &p);
+	if (rc)
+		return rc;
+
+	rc = mutex_lock_interruptible(&cxled->res_lock);
+	if (rc)
+		return rc;
+
+	if (range_len(&cxled->drange) > 0)
+		rc = -EBUSY;
+	mutex_unlock(&cxled->res_lock);
+	if (rc)
+		return rc;
+
+	cxled->volatil = p;
+	return len;
+}
+static DEVICE_ATTR_RW(volatile);
 
 #define CXL_DECODER_FLAG_ATTR(name, flag)                            \
 static ssize_t name##_show(struct device *dev,                       \
@@ -237,6 +375,7 @@ static const struct attribute_group *cxl_decoder_switch_attribute_groups[] = {
 
 static struct attribute *cxl_decoder_endpoint_attrs[] = {
 	&dev_attr_target_type.attr,
+	&dev_attr_volatile.attr,
 	NULL,
 };
 
@@ -433,6 +572,7 @@ static struct cxl_port *cxl_port_alloc(struct device *uport,
 	ida_init(&port->decoder_ida);
 	INIT_LIST_HEAD(&port->dports);
 	INIT_LIST_HEAD(&port->endpoints);
+	mutex_init(&port->media_lock);
 
 	device_initialize(dev);
 	device_set_pm_not_required(dev);
@@ -1212,6 +1352,7 @@ static struct cxl_decoder *__cxl_decoder_alloc(struct cxl_port *port,
 		if (!cxled)
 			return NULL;
 		cxled->range = (struct range){ 0, -1 };
+		mutex_init(&cxled->res_lock);
 		cxld = &cxled->base;
 	} else if (is_cxl_root(port)) {
 		struct cxl_root_decoder *cxlrd;

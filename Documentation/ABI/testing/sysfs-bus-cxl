@@ -117,7 +117,9 @@ Description:
 		range is fixed. For decoders of devtype "cxl_decoder_switch" the
 		address is bounded by the decode range of the cxl_port ancestor
 		of the decoder's cxl_port, and dynamically updates based on the
-		active memory regions in that address space.
+		active memory regions in that address space. For decoders of
+		devtype "cxl_decoder_endpoint", size is a mutable value which
+		carves our space from the physical media.
 
 What:		/sys/bus/cxl/devices/decoderX.Y/locked
 Date:		June, 2021
@@ -163,3 +165,12 @@ Description:
 		memory (type-3). The 'target_type' attribute indicates the
 		current setting which may dynamically change based on what
 		memory regions are activated in this decode hierarchy.
+
+What:		/sys/bus/cxl/devices/decoderX.Y/volatile
+Date:		March, 2022
+KernelVersion:	v5.19
+Contact:	linux-cxl@vger.kernel.org
+Description:
+		Provide a knob to set/get whether the desired media is volatile
+		or persistent. This applies only to decoders of devtype
+		"cxl_decoder_endpoint",
