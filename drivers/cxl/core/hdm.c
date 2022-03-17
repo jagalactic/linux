@@ -255,6 +255,8 @@ int devm_cxl_enumerate_decoders(struct cxl_hdm *cxlhdm)
 				      cxlhdm->regs.hdm_decoder, i);
 		if (rc) {
 			put_device(&cxld->dev);
+			if (is_endpoint_decoder(&cxld->dev))
+				return rc;
 			failed++;
 			continue;
 		}
