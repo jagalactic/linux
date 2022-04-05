@@ -76,6 +76,7 @@ static int cxl_acpi_cfmws_verify(struct device *dev,
 struct cxl_cfmws_context {
 	struct device *dev;
 	struct cxl_port *root_port;
+	struct acpi_cedt_cfmws *high_cfmws;
 };
 
 static int cxl_parse_cfmws(union acpi_subtable_headers *header, void *arg,
@@ -124,6 +125,13 @@ static int cxl_parse_cfmws(union acpi_subtable_headers *header, void *arg,
 		dev_err(dev, "Failed to add decoder for %pr\n",
 			&to_cxl_root_decoder(cxld)->res);
 		return 0;
+	}
+
+	if (ctx->high_cfmws) {
+		if (cfmws->base_hpa > ctx->high_cfmws->base_hpa)
+			ctx->high_cfmws = cfmws;
+	} else {
+		ctx->high_cfmws = cfmws;
 	}
 	dev_dbg(dev, "add: %s node: %d range %pr\n", dev_name(&cxld->dev),
 		phys_to_target_node(to_cxl_root_decoder(cxld)->res.start),
@@ -298,6 +306,7 @@ static int cxl_acpi_probe(struct platform_device *pdev)
 	ctx = (struct cxl_cfmws_context) {
 		.dev = host,
 		.root_port = root_port,
+		.high_cfmws = NULL,
 	};
 	acpi_table_parse_cedt(ACPI_CEDT_TYPE_CFMWS, cxl_parse_cfmws, &ctx);
 
@@ -316,8 +325,20 @@ static int cxl_acpi_probe(struct platform_device *pdev)
 	if (rc < 0)
 		return rc;
 
+	if (ctx.high_cfmws) {
+		resource_size_t end = ctx.high_cfmws->base_hpa + ctx.high_cfmws->window_size;
+		dev_dbg(host, "Disabling free device private regions below %#llx\n", end);
+		set_request_free_min_base(end);
+	}
+
 	/* In case PCI is scanned before ACPI re-trigger memdev attach */
 	return cxl_bus_rescan();
+}
+
+static int cxl_acpi_remove(struct platform_device *pdev)
+{
+	set_request_free_min_base(0);
+	return 0;
 }
 
 static const struct acpi_device_id cxl_acpi_ids[] = {
@@ -328,6 +349,7 @@ MODULE_DEVICE_TABLE(acpi, cxl_acpi_ids);
 
 static struct platform_driver cxl_acpi_driver = {
 	.probe = cxl_acpi_probe,
+	.remove = cxl_acpi_remove,
 	.driver = {
 		.name = KBUILD_MODNAME,
 		.acpi_match_table = cxl_acpi_ids,

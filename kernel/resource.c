@@ -1774,6 +1774,14 @@ void resource_list_free(struct list_head *head)
 EXPORT_SYMBOL(resource_list_free);
 
 #ifdef CONFIG_DEVICE_PRIVATE
+static resource_size_t request_free_min_base;
+
+void set_request_free_min_base(resource_size_t val)
+{
+	request_free_min_base = val;
+}
+EXPORT_SYMBOL_GPL(set_request_free_min_base);
+
 static struct resource *__request_free_mem_region(struct device *dev,
 		struct resource *base, unsigned long size, const char *name)
 {
@@ -1799,7 +1807,8 @@ static struct resource *__request_free_mem_region(struct device *dev,
 	}
 
 	write_lock(&resource_lock);
-	for (; addr > size && addr >= base->start; addr -= size) {
+	for (; addr > size && addr >= max(base->start, request_free_min_base);
+	     addr -= size) {
 		if (__region_intersects(addr, size, 0, IORES_DESC_NONE) !=
 				REGION_DISJOINT)
 			continue;
