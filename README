@@ -2,7 +2,7 @@
 Micron CXL Kernel Readme
 ========================
 
-* This is the "cxl2" kernel from November 2021
+* This is the "cxl3" kernel from November 2021
 * Security is disabled
 * Raw mailbox ioctl commands are enabled
 * ("normal" mailbox command ioctls also work)
@@ -16,10 +16,10 @@ Micron CXL Kernel Readme
 Building
 ========
 
-An appropriate config file is checked in as config-cxl2.  To build this
+An appropriate config file is checked in as config-cxl3.  To build this
 kernel, move that to ".config" and build.  E.g.:
 
-    cp config-cxl2 .config
+    cp config-cxl3 .config
     make [-j24]
 
 
@@ -41,7 +41,7 @@ Setting Default Kernel
     grubby --set-default=/boot/<kernel>
 
 Where <kernel> is the kernel file you want to activate as the default
-(e.g. vmlinuz-5.15.0-rc2-cxl2+)
+(e.g. vmlinuz-5.15.0-rc2-cxl3+)
 
 Debugging
 =========
