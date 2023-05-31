@@ -137,6 +137,8 @@ enum aspeed_i2c_slave_state {
 	ASPEED_I2C_SLAVE_STOP,
 };
 
+typedef u32 (*aspeed_get_clk_reg_val_cb)(struct device *dev, u32 divisor);
+
 struct aspeed_i2c_bus {
 	struct i2c_adapter		adap;
 	struct device			*dev;
@@ -145,8 +147,7 @@ struct aspeed_i2c_bus {
 	/* Synchronizes I/O mem access to base. */
 	spinlock_t			lock;
 	struct completion		cmd_complete;
-	u32				(*get_clk_reg_val)(struct device *dev,
-							   u32 divisor);
+	aspeed_get_clk_reg_val_cb	get_clk_reg_val;
 	unsigned long			parent_clk_frequency;
 	u32				bus_frequency;
 	/* Transaction state. */
@@ -1032,8 +1033,7 @@ static int aspeed_i2c_probe_bus(struct platform_device *pdev)
 	if (!match)
 		bus->get_clk_reg_val = aspeed_i2c_24xx_get_clk_reg_val;
 	else
-		bus->get_clk_reg_val = (u32 (*)(struct device *, u32))
-				match->data;
+		bus->get_clk_reg_val = (aspeed_get_clk_reg_val_cb)(match->data);
 
 	/* Initialize the I2C adapter */
 	spin_lock_init(&bus->lock);
