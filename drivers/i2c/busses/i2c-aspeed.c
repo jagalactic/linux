@@ -1039,7 +1039,6 @@ static int aspeed_i2c_probe_bus(struct platform_device *pdev)
 	bus->adap.retries = 0;
 	bus->adap.algo = &aspeed_i2c_algo;
 	bus->adap.dev.parent = &pdev->dev;
-	bus->adap.dev.of_node = pdev->dev.of_node;
 	strscpy(bus->adap.name, pdev->name, sizeof(bus->adap.name));
 	i2c_set_adapdata(&bus->adap, bus);
 
@@ -1064,6 +1063,8 @@ static int aspeed_i2c_probe_bus(struct platform_device *pdev)
 			       0, dev_name(&pdev->dev), bus);
 	if (ret < 0)
 		return ret;
+
+	device_set_node(&bus->adap.dev, dev_fwnode(&pdev->dev));
 
 	ret = i2c_add_adapter(&bus->adap);
 	if (ret < 0)
