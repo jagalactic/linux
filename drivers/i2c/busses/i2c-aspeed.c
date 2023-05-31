@@ -18,9 +18,8 @@
 #include <linux/irq.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
-#include <linux/of_address.h>
-#include <linux/of_platform.h>
 #include <linux/platform_device.h>
+#include <linux/property.h>
 #include <linux/reset.h>
 #include <linux/slab.h>
 
@@ -997,7 +996,6 @@ MODULE_DEVICE_TABLE(of, aspeed_i2c_bus_of_table);
 
 static int aspeed_i2c_probe_bus(struct platform_device *pdev)
 {
-	const struct of_device_id *match;
 	struct aspeed_i2c_bus *bus;
 	struct clk *parent_clk;
 	int irq, ret;
@@ -1026,14 +1024,13 @@ static int aspeed_i2c_probe_bus(struct platform_device *pdev)
 	reset_control_deassert(bus->rst);
 
 	bus->bus_frequency = I2C_MAX_STANDARD_MODE_FREQ;
-	of_property_read_u32(pdev->dev.of_node,
-			     "bus-frequency", &bus->bus_frequency);
+	device_property_read_u32(&pdev->dev,
+				 "bus-frequency", &bus->bus_frequency);
 
-	match = of_match_node(aspeed_i2c_bus_of_table, pdev->dev.of_node);
-	if (!match)
+	bus->get_clk_reg_val =
+		(aspeed_get_clk_reg_val_cb)device_get_match_data(&pdev->dev);
+	if (!bus->get_clk_reg_val)
 		bus->get_clk_reg_val = aspeed_i2c_24xx_get_clk_reg_val;
-	else
-		bus->get_clk_reg_val = (aspeed_get_clk_reg_val_cb)(match->data);
 
 	/* Initialize the I2C adapter */
 	spin_lock_init(&bus->lock);
