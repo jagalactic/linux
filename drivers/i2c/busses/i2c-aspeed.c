@@ -1008,14 +1008,14 @@ static int aspeed_i2c_probe_bus(struct platform_device *pdev)
 	if (IS_ERR(bus->base))
 		return PTR_ERR(bus->base);
 
-	parent_clk = devm_clk_get(&pdev->dev, NULL);
-	if (IS_ERR(parent_clk))
-		return PTR_ERR(parent_clk);
-	bus->parent_clk_frequency = clk_get_rate(parent_clk);
+	//	parent_clk = devm_clk_get(&pdev->dev, NULL);
+	//	if (IS_ERR(parent_clk))//
+	//		return PTR_ERR(parent_clk);
+	bus->parent_clk_frequency = 1000000;//clk_get_rate(parent_clk);
 	/* We just need the clock rate, we don't actually use the clk object. */
-	devm_clk_put(&pdev->dev, parent_clk);
+	//devm_clk_put(&pdev->dev, parent_clk);
 
-	bus->rst = devm_reset_control_get_shared(&pdev->dev, NULL);
+	bus->rst = devm_reset_control_get_optional_shared(&pdev->dev, NULL);
 	if (IS_ERR(bus->rst)) {
 		dev_err(&pdev->dev,
 			"missing or invalid reset controller device tree entry\n");
