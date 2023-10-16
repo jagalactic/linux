@@ -146,4 +146,17 @@ config CXL_REGION_INVALIDATION_TEST
 	  If unsure, or if this kernel is meant for production environments,
 	  say N.
 
+config CXL_SWITCH
+	tristate "CXL switch mailbox access"
+	help
+	  The CXL r3.0 specification defines a "CXL switch CCI" sub-class in the
+	  PCI "Serial" base class of devices. Device's identified by
+	  this class code provide a mailbox interface to allow control of CXL
+	  switch configuration over inband PCI.
+
+	  Say 'y/m' to enable a driver that will attach to CXL Switch CCI
+	  devices enumerated by the CXL switch CCI class code for configuration
+	  and management primarily via the mailbox interface.
+
+
 endif

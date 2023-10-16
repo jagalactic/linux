@@ -146,4 +146,14 @@ int cxl_port_get_switch_dport_bandwidth(struct cxl_port *port,
 					struct access_coordinate *c);
 void memdev_release_extent(struct cxl_memdev_state *mds, struct range *range);
 
+/*
+ * An entire PCI topology full of devices should be enough for any
+ * config
+ */
+#define CXL_MEM_MAX_DEVS 65536
+
+extern int cxl_mem_major;
+extern struct ida cxl_memdev_ida;
+extern struct rw_semaphore cxl_memdev_rwsem;
+
 #endif /* __CXL_CORE_H__ */
