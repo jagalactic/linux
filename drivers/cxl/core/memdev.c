@@ -38,7 +38,7 @@ static char *cxl_memdev_devnode(const struct device *dev, umode_t *mode, kuid_t 
 }
 
 static ssize_t firmware_version_show(struct device *dev,
-				     struct device_attribute *attr, char *buf)
+					 struct device_attribute *attr, char *buf)
 {
 	struct cxl_memdev *cxlmd = to_cxl_memdev(dev);
 	struct cxl_dev_state *cxlds = cxlmd->cxlds;
@@ -64,7 +64,7 @@ static ssize_t payload_max_show(struct device *dev,
 static DEVICE_ATTR_RO(payload_max);
 
 static ssize_t label_storage_size_show(struct device *dev,
-				       struct device_attribute *attr, char *buf)
+					   struct device_attribute *attr, char *buf)
 {
 	struct cxl_memdev *cxlmd = to_cxl_memdev(dev);
 	struct cxl_dev_state *cxlds = cxlmd->cxlds;
@@ -77,7 +77,7 @@ static ssize_t label_storage_size_show(struct device *dev,
 static DEVICE_ATTR_RO(label_storage_size);
 
 static ssize_t ram_size_show(struct device *dev, struct device_attribute *attr,
-			     char *buf)
+				 char *buf)
 {
 	struct cxl_memdev *cxlmd = to_cxl_memdev(dev);
 	struct cxl_dev_state *cxlds = cxlmd->cxlds;
@@ -90,7 +90,7 @@ static struct device_attribute dev_attr_ram_size =
 	__ATTR(size, 0444, ram_size_show, NULL);
 
 static ssize_t pmem_size_show(struct device *dev, struct device_attribute *attr,
-			      char *buf)
+				  char *buf)
 {
 	struct cxl_memdev *cxlmd = to_cxl_memdev(dev);
 	struct cxl_dev_state *cxlds = cxlmd->cxlds;
@@ -113,7 +113,7 @@ static ssize_t serial_show(struct device *dev, struct device_attribute *attr,
 static DEVICE_ATTR_RO(serial);
 
 static ssize_t numa_node_show(struct device *dev, struct device_attribute *attr,
-			      char *buf)
+				  char *buf)
 {
 	return sysfs_emit(buf, "%d\n", dev_to_node(dev));
 }
@@ -141,8 +141,8 @@ static ssize_t security_state_show(struct device *dev,
 	if (!(state & CXL_PMEM_SEC_STATE_USER_PASS_SET))
 		return sysfs_emit(buf, "disabled\n");
 	if (state & CXL_PMEM_SEC_STATE_FROZEN ||
-	    state & CXL_PMEM_SEC_STATE_MASTER_PLIMIT ||
-	    state & CXL_PMEM_SEC_STATE_USER_PLIMIT)
+		state & CXL_PMEM_SEC_STATE_MASTER_PLIMIT ||
+		state & CXL_PMEM_SEC_STATE_USER_PLIMIT)
 		return sysfs_emit(buf, "frozen\n");
 	if (state & CXL_PMEM_SEC_STATE_LOCKED)
 		return sysfs_emit(buf, "locked\n");
@@ -153,8 +153,8 @@ static struct device_attribute dev_attr_security_state =
 	__ATTR(state, 0444, security_state_show, NULL);
 
 static ssize_t security_sanitize_store(struct device *dev,
-				       struct device_attribute *attr,
-				       const char *buf, size_t len)
+					   struct device_attribute *attr,
+					   const char *buf, size_t len)
 {
 	struct cxl_memdev *cxlmd = to_cxl_memdev(dev);
 	bool sanitize;
@@ -173,8 +173,8 @@ static struct device_attribute dev_attr_security_sanitize =
 	__ATTR(sanitize, 0200, NULL, security_sanitize_store);
 
 static ssize_t security_erase_store(struct device *dev,
-				    struct device_attribute *attr,
-				    const char *buf, size_t len)
+					struct device_attribute *attr,
+					const char *buf, size_t len)
 {
 	struct cxl_memdev *cxlmd = to_cxl_memdev(dev);
 	ssize_t rc;
@@ -316,8 +316,8 @@ int cxl_inject_poison(struct cxl_memdev *cxlmd, u64 dpa)
 	cxlr = cxl_dpa_to_region(cxlmd, dpa, NULL);
 	if (cxlr)
 		dev_warn_once(cxl_mbox->host,
-			      "poison inject dpa:%#llx region: %s\n", dpa,
-			      dev_name(&cxlr->dev));
+				  "poison inject dpa:%#llx region: %s\n", dpa,
+				  dev_name(&cxlr->dev));
 
 	record = (struct cxl_poison_record) {
 		.address = cpu_to_le64(dpa),
@@ -380,8 +380,8 @@ int cxl_clear_poison(struct cxl_memdev *cxlmd, u64 dpa)
 	cxlr = cxl_dpa_to_region(cxlmd, dpa, NULL);
 	if (cxlr)
 		dev_warn_once(cxl_mbox->host,
-			      "poison clear dpa:%#llx region: %s\n", dpa,
-			      dev_name(&cxlr->dev));
+				  "poison clear dpa:%#llx region: %s\n", dpa,
+				  dev_name(&cxlr->dev));
 
 	record = (struct cxl_poison_record) {
 		.address = cpu_to_le64(dpa),
@@ -492,8 +492,8 @@ struct device_attribute dc##n##_size = {					\
 	.show	= dc##n##_size_show,						\
 };										\
 static ssize_t dc##n##_read_only_show(struct device *dev,			\
-				      struct device_attribute *attr,		\
-				      char *buf)				\
+					  struct device_attribute *attr,		\
+					  char *buf)				\
 {										\
 	return show_read_only_dcN(to_cxl_memdev(dev), buf, (n));		\
 }										\
@@ -502,8 +502,8 @@ struct device_attribute dc##n##_read_only = {					\
 	.show	= dc##n##_read_only_show,					\
 };										\
 static ssize_t dc##n##_shareable_show(struct device *dev,			\
-				     struct device_attribute *attr,		\
-				     char *buf)					\
+					 struct device_attribute *attr,		\
+					 char *buf)					\
 {										\
 	return show_shareable_dcN(to_cxl_memdev(dev), buf, (n));		\
 }										\
@@ -512,8 +512,8 @@ struct device_attribute dc##n##_shareable = {					\
 	.show	= dc##n##_shareable_show,					\
 };										\
 static ssize_t dc##n##_qos_class_show(struct device *dev,			\
-				      struct device_attribute *attr,		\
-				      char *buf)				\
+					  struct device_attribute *attr,		\
+					  char *buf)				\
 {										\
 	return show_qos_class_dcN(to_cxl_memdev(dev), buf, (n));		\
 }										\
@@ -529,8 +529,8 @@ static struct attribute *cxl_memdev_dc##n##_attributes[] = {			\
 	NULL									\
 };										\
 static umode_t cxl_memdev_dc##n##_attr_visible(struct kobject *kobj,		\
-					       struct attribute *a,		\
-					       int pos)				\
+						   struct attribute *a,		\
+						   int pos)				\
 {										\
 	struct device *dev = kobj_to_dev(kobj);					\
 	struct cxl_memdev *cxlmd = to_cxl_memdev(dev);				\
@@ -624,11 +624,11 @@ static umode_t cxl_memdev_security_visible(struct kobject *kobj,
 	struct cxl_memdev_state *mds = to_cxl_memdev_state(cxlmd->cxlds);
 
 	if (a == &dev_attr_security_sanitize.attr &&
-	    !test_bit(CXL_SEC_ENABLED_SANITIZE, mds->security.enabled_cmds))
+		!test_bit(CXL_SEC_ENABLED_SANITIZE, mds->security.enabled_cmds))
 		return 0;
 
 	if (a == &dev_attr_security_erase.attr &&
-	    !test_bit(CXL_SEC_ENABLED_SECURE_ERASE, mds->security.enabled_cmds))
+		!test_bit(CXL_SEC_ENABLED_SECURE_ERASE, mds->security.enabled_cmds))
 		return 0;
 
 	return a->mode;
@@ -689,8 +689,9 @@ void set_exclusive_cxl_commands(struct cxl_memdev_state *mds,
 				unsigned long *cmds)
 {
 	down_write(&cxl_memdev_rwsem);
-	bitmap_or(mds->exclusive_cmds, mds->exclusive_cmds, cmds,
-		  CXL_MEM_COMMAND_ID_MAX);
+	bitmap_or(mds->cxlds.cxl_mbox.exclusive_cmds,
+		mds->cxlds.cxl_mbox.exclusive_cmds,
+		cmds, CXL_MEM_COMMAND_ID_MAX);
 	up_write(&cxl_memdev_rwsem);
 }
 EXPORT_SYMBOL_NS_GPL(set_exclusive_cxl_commands, "CXL");
@@ -704,8 +705,9 @@ void clear_exclusive_cxl_commands(struct cxl_memdev_state *mds,
 				  unsigned long *cmds)
 {
 	down_write(&cxl_memdev_rwsem);
-	bitmap_andnot(mds->exclusive_cmds, mds->exclusive_cmds, cmds,
-		      CXL_MEM_COMMAND_ID_MAX);
+	bitmap_andnot(mds->cxlds.regs.device_regs.mbox,
+			mds->cxlds.cxl_mbox.exclusive_cmds, cmds,
+			CXL_MEM_COMMAND_ID_MAX);
 	up_write(&cxl_memdev_rwsem);
 }
 EXPORT_SYMBOL_NS_GPL(clear_exclusive_cxl_commands, "CXL");
@@ -778,7 +780,7 @@ err:
 }
 
 static long __cxl_memdev_ioctl(struct cxl_memdev *cxlmd, unsigned int cmd,
-			       unsigned long arg)
+				   unsigned long arg)
 {
 	switch (cmd) {
 	case CXL_MEM_QUERY_COMMANDS:
@@ -791,7 +793,7 @@ static long __cxl_memdev_ioctl(struct cxl_memdev *cxlmd, unsigned int cmd,
 }
 
 static long cxl_memdev_ioctl(struct file *file, unsigned int cmd,
-			     unsigned long arg)
+				 unsigned long arg)
 {
 	struct cxl_memdev *cxlmd = file->private_data;
 	struct cxl_dev_state *cxlds;
@@ -856,7 +858,7 @@ static int cxl_mem_get_fw_info(struct cxl_memdev_state *mds)
 
 	mds->fw.num_slots = info.num_slots;
 	mds->fw.cur_slot = FIELD_GET(CXL_FW_INFO_SLOT_INFO_CUR_MASK,
-				       info.slot_info);
+					   info.slot_info);
 
 	return 0;
 }
@@ -963,7 +965,7 @@ static enum fw_upload_err cxl_fw_prepare(struct fw_upload *fwl, const u8 *data,
 		return FW_UPLOAD_ERR_INVALID_SIZE;
 
 	mds->fw.oneshot = struct_size(transfer, data, size) <
-			    cxl_mbox->payload_size;
+				cxl_mbox->payload_size;
 
 	if (cxl_mem_get_fw_info(mds))
 		return FW_UPLOAD_ERR_HW_ERROR;
@@ -979,7 +981,7 @@ static enum fw_upload_err cxl_fw_prepare(struct fw_upload *fwl, const u8 *data,
 }
 
 static enum fw_upload_err cxl_fw_write(struct fw_upload *fwl, const u8 *data,
-				       u32 offset, u32 size, u32 *written)
+					   u32 offset, u32 size, u32 *written)
 {
 	struct cxl_memdev_state *mds = fwl->dd_handle;
 	struct cxl_dev_state *cxlds = &mds->cxlds;
@@ -1103,11 +1105,11 @@ static void cxl_fw_cancel(struct fw_upload *fwl)
 }
 
 static const struct fw_upload_ops cxl_memdev_fw_ops = {
-        .prepare = cxl_fw_prepare,
-        .write = cxl_fw_write,
-        .poll_complete = cxl_fw_poll_complete,
-        .cancel = cxl_fw_cancel,
-        .cleanup = cxl_fw_cleanup,
+		.prepare = cxl_fw_prepare,
+		.write = cxl_fw_write,
+		.poll_complete = cxl_fw_poll_complete,
+		.cancel = cxl_fw_cancel,
+		.cleanup = cxl_fw_cleanup,
 };
 
 static void cxl_remove_fw_upload(void *fwl)
@@ -1121,11 +1123,11 @@ int devm_cxl_setup_fw_upload(struct device *host, struct cxl_memdev_state *mds)
 	struct device *dev = &cxlds->cxlmd->dev;
 	struct fw_upload *fwl;
 
-	if (!test_bit(CXL_MEM_COMMAND_ID_GET_FW_INFO, mds->enabled_cmds))
+	if (!test_bit(CXL_MEM_COMMAND_ID_GET_FW_INFO, mds->cxlds.cxl_mbox.enabled_cmds))
 		return 0;
 
 	fwl = firmware_upload_register(THIS_MODULE, dev, dev_name(dev),
-				       &cxl_memdev_fw_ops, mds);
+					   &cxl_memdev_fw_ops, mds);
 	if (IS_ERR(fwl))
 		return PTR_ERR(fwl);
 	return devm_add_action_or_reset(host, cxl_remove_fw_upload, fwl);
@@ -1142,7 +1144,7 @@ static const struct file_operations cxl_memdev_fops = {
 };
 
 struct cxl_memdev *devm_cxl_add_memdev(struct device *host,
-				       struct cxl_dev_state *cxlds)
+					   struct cxl_dev_state *cxlds)
 {
 	struct cxl_memdev *cxlmd;
 	struct device *dev;
@@ -1206,7 +1208,7 @@ static void sanitize_teardown_notifier(void *data)
 }
 
 int devm_cxl_sanitize_setup_notifier(struct device *host,
-				     struct cxl_memdev *cxlmd)
+					 struct cxl_memdev *cxlmd)
 {
 	struct cxl_dev_state *cxlds = cxlmd->cxlds;
 	struct cxl_memdev_state *mds = to_cxl_memdev_state(cxlds);

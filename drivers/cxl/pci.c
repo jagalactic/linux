@@ -53,51 +53,76 @@ MODULE_PARM_DESC(mbox_ready_timeout, "seconds to wait for mailbox ready");
  * wrapper object for each irq within the same cxlds.
  */
 struct cxl_dev_id {
-	struct cxl_dev_state *cxlds;
+	struct cxl_memdev_state *mds;
 };
 
-static int cxl_request_irq(struct cxl_dev_state *cxlds, int irq,
-			   irq_handler_t thread_fn)
+static int cxl_request_irq(struct device *dev, struct cxl_memdev_state *mds,
+            int irq, irq_handler_t thread_fn)
 {
-	struct device *dev = cxlds->dev;
 	struct cxl_dev_id *dev_id;
 
 	dev_id = devm_kzalloc(dev, sizeof(*dev_id), GFP_KERNEL);
 	if (!dev_id)
 		return -ENOMEM;
-	dev_id->cxlds = cxlds;
+	dev_id->mds = mds;
 
 	return devm_request_threaded_irq(dev, irq, NULL, thread_fn,
 					 IRQF_SHARED | IRQF_ONESHOT, NULL,
 					 dev_id);
 }
 
-static irqreturn_t cxl_pci_mbox_irq(int irq, void *id)
+static bool cxl_pci_mbox_special_irq(struct cxl_mailbox *mbox, u16 opcode)
 {
-	u64 reg;
-	u16 opcode;
-	struct cxl_dev_id *dev_id = id;
-	struct cxl_dev_state *cxlds = dev_id->cxlds;
-	struct cxl_mailbox *cxl_mbox = &cxlds->cxl_mbox;
-	struct cxl_memdev_state *mds = to_cxl_memdev_state(cxlds);
-
-	if (!cxl_mbox_background_complete(cxlds))
-		return IRQ_NONE;
-
-	reg = readq(cxlds->regs.mbox + CXLDEV_MBOX_BG_CMD_STATUS_OFFSET);
-	opcode = FIELD_GET(CXLDEV_MBOX_BG_CMD_COMMAND_OPCODE_MASK, reg);
 	if (opcode == CXL_MBOX_OP_SANITIZE) {
-		mutex_lock(&cxl_mbox->mbox_mutex);
-		if (mds->security.sanitize_node)
-			mod_delayed_work(system_wq, &mds->security.poll_dwork, 0);
-		mutex_unlock(&cxl_mbox->mbox_mutex);
-	} else {
-		/* short-circuit the wait in __cxl_pci_mbox_send_cmd() */
-		rcuwait_wake_up(&cxl_mbox->mbox_wait);
+		struct cxl_dev_state *cxlds =
+			container_of(mbox, struct cxl_dev_state, cxl_mbox);
+
+		struct cxl_memdev_state *mds =
+			container_of(cxlds, struct cxl_memdev_state, cxlds);
+
+ 		if (mds->security.sanitize_node)
+ 			sysfs_notify_dirent(mds->security.sanitize_node);
+		dev_dbg(mbox->host, "Sanitization operation ended\n");
+		return true;
 	}
 
-	return IRQ_HANDLED;
+	return false;
 }
+
+static bool cxl_pci_mbox_special_bg(struct cxl_mailbox *mbox, u16 opcode)
+{
+	if (opcode == CXL_MBOX_OP_SANITIZE) {
+        struct cxl_dev_state *cxlds =
+            container_of(mbox, struct cxl_dev_state, cxl_mbox);
+		struct cxl_memdev_state *mds =
+			container_of(cxlds, struct cxl_memdev_state, cxlds);
+
+		if (test_bit(opcode, mds->security.enabled_cmds)) {
+			/* give first timeout a second */
+			int timeout = 1;
+			/* hold the device throughout */
+			get_device(mds->cxlds.dev);
+
+			mds->security.poll_tmo_secs = timeout;
+			queue_delayed_work(system_wq,
+					&mds->security.poll_dwork,
+					timeout * HZ);
+		}
+		dev_dbg(mbox->host, "Sanitization operation started\n");
+
+		return true;
+ 	}
+
+	return false;
+}
+
+static irqreturn_t cxl_pci_mbox_irq(int irq, void *id)
+{
+	struct cxl_dev_id *dev_id = id;
+	struct cxl_memdev_state *mds = dev_id->mds;
+
+	return cxl_mbox_irq(irq, &mds->cxlds.cxl_mbox);
+ }
 
 /*
  * Sanitization operation polling mode.
@@ -126,6 +151,51 @@ static void cxl_mbox_sanitize_work(struct work_struct *work)
 	mutex_unlock(&cxl_mbox->mbox_mutex);
 }
 
+static u64 cxl_pci_mbox_get_status(struct cxl_mailbox *mbox)
+{
+	struct cxl_dev_state *cxlds = container_of(mbox, struct cxl_dev_state, cxl_mbox);
+
+	return readq(cxlds->regs.memdev + CXLMDEV_STATUS_OFFSET);
+}
+
+static bool cxl_pci_mbox_can_run(struct cxl_mailbox *mbox, u16 opcode)
+{
+	struct cxl_dev_state *cxlds = container_of(mbox, struct cxl_dev_state, cxl_mbox);
+	struct cxl_memdev_state *mds = container_of(cxlds, struct cxl_memdev_state, cxlds);
+
+	if (mds->security.poll_tmo_secs > 0) {
+		if (opcode != CXL_MBOX_OP_GET_HEALTH_INFO)
+			return false;
+	}
+
+	return true;
+}
+
+static void cxl_pci_mbox_init_poll(struct cxl_mailbox *mbox)
+{
+	struct cxl_dev_state *cxlds = container_of(mbox, struct cxl_dev_state, cxl_mbox);
+	struct cxl_memdev_state *mds = container_of(cxlds, struct cxl_memdev_state, cxlds);
+
+	mds->security.sanitize_active = true;
+	INIT_DELAYED_WORK(&mds->security.poll_dwork, cxl_mbox_sanitize_work);
+}
+
+static bool cxl_pci_mbox_extra_cmds(struct cxl_mailbox *mbox, u16 opcode)
+{
+	struct cxl_dev_state *cxlds = container_of(mbox, struct cxl_dev_state, cxl_mbox);
+	struct cxl_memdev_state *mds = container_of(cxlds, struct cxl_memdev_state, cxlds);
+	bool found = false;
+	if (cxl_is_poison_command(opcode)) {
+		cxl_set_poison_cmd_enabled(&mds->poison, opcode);
+		found = true;
+	}
+	if (cxl_is_security_command(opcode)) {
+		cxl_set_security_cmd_enabled(&mds->security, opcode);
+		found = true;
+	}
+
+	return found;
+ }
 
 static int cxl_pci_setup_mailbox(struct cxl_memdev_state *mds, bool irq_avail)
 {
@@ -191,10 +261,10 @@ static int cxl_pci_setup_mailbox(struct cxl_memdev_state *mds, bool irq_avail)
 	msgnum = FIELD_GET(CXLDEV_MBOX_CAP_IRQ_MSGNUM_MASK, cap);
 	irq = pci_irq_vector(to_pci_dev(cxlds->dev), msgnum);
 	if (irq < 0)
-		return 0;
+		goto mbox_poll;
 
-	if (cxl_request_irq(cxlds, irq, cxl_pci_mbox_irq))
-		return 0;
+	if (cxl_request_irq(cxlds->dev, mds, irq, cxl_pci_mbox_irq))
+		goto mbox_poll;
 
 	dev_dbg(cxlds->dev, "Mailbox interrupts enabled\n");
 	/* enable background command mbox irq support */
@@ -203,7 +273,13 @@ static int cxl_pci_setup_mailbox(struct cxl_memdev_state *mds, bool irq_avail)
 	writel(ctrl, cxlds->regs.mbox + CXLDEV_MBOX_CTRL_OFFSET);
 
 	return 0;
-}
+
+ mbox_poll:
+	cxl_pci_mbox_init_poll(cxl_mbox);
+
+	dev_dbg(dev, "Mailbox interrupts are unsupported");
+ 	return 0;
+ }
 
 /*
  * Assume that any RCIEP that emits the CXL memory expander class code
@@ -368,8 +444,8 @@ static bool cxl_alloc_irq_vectors(struct pci_dev *pdev)
 static irqreturn_t cxl_event_thread(int irq, void *id)
 {
 	struct cxl_dev_id *dev_id = id;
-	struct cxl_dev_state *cxlds = dev_id->cxlds;
-	struct cxl_memdev_state *mds = to_cxl_memdev_state(cxlds);
+	struct cxl_memdev_state *mds = dev_id->mds;
+    struct cxl_dev_state *cxlds = &mds->cxlds;
 	u32 status;
 
 	do {
@@ -389,9 +465,9 @@ static irqreturn_t cxl_event_thread(int irq, void *id)
 	return IRQ_HANDLED;
 }
 
-static int cxl_event_req_irq(struct cxl_dev_state *cxlds, u8 setting)
+static int cxl_event_req_irq(struct cxl_memdev_state *mds, u8 setting)
 {
-	struct pci_dev *pdev = to_pci_dev(cxlds->dev);
+	struct pci_dev *pdev = to_pci_dev(mds->cxlds.dev);
 	int irq;
 
 	if (FIELD_GET(CXLDEV_EVENT_INT_MODE_MASK, setting) != CXL_INT_MSI_MSIX)
@@ -402,7 +478,7 @@ static int cxl_event_req_irq(struct cxl_dev_state *cxlds, u8 setting)
 	if (irq < 0)
 		return irq;
 
-	return cxl_request_irq(cxlds, irq, cxl_event_thread);
+	return cxl_request_irq(mds->cxlds.dev, mds, irq, cxl_event_thread);
 }
 
 static int cxl_event_get_int_policy(struct cxl_memdev_state *mds,
@@ -469,30 +545,30 @@ static int cxl_event_config_msgnums(struct cxl_memdev_state *mds,
 static int cxl_event_irqsetup(struct cxl_memdev_state *mds,
 			      struct cxl_event_interrupt_policy *policy)
 {
-	struct cxl_dev_state *cxlds = &mds->cxlds;
+	struct device *dev = mds->cxlds.dev;
 	int rc;
 
-	rc = cxl_event_req_irq(cxlds, policy->info_settings);
+	rc = cxl_event_req_irq(mds, policy->info_settings);
 	if (rc) {
-		dev_err(cxlds->dev, "Failed to get interrupt for event Info log\n");
+		dev_err(dev, "Failed to get interrupt for event Info log\n");
 		return rc;
 	}
 
-	rc = cxl_event_req_irq(cxlds, policy->warn_settings);
+	rc = cxl_event_req_irq(mds, policy->warn_settings);
 	if (rc) {
-		dev_err(cxlds->dev, "Failed to get interrupt for event Warn log\n");
+		dev_err(dev, "Failed to get interrupt for event Warn log\n");
 		return rc;
 	}
 
-	rc = cxl_event_req_irq(cxlds, policy->failure_settings);
+	rc = cxl_event_req_irq(mds, policy->failure_settings);
 	if (rc) {
-		dev_err(cxlds->dev, "Failed to get interrupt for event Failure log\n");
+		dev_err(dev, "Failed to get interrupt for event Failure log\n");
 		return rc;
 	}
 
-	rc = cxl_event_req_irq(cxlds, policy->fatal_settings);
+	rc = cxl_event_req_irq(mds, policy->fatal_settings);
 	if (rc) {
-		dev_err(cxlds->dev, "Failed to get interrupt for event Fatal log\n");
+		dev_err(dev, "Failed to get interrupt for event Fatal log\n");
 		return rc;
 	}
 
@@ -513,7 +589,7 @@ static int cxl_irqsetup(struct cxl_memdev_state *mds,
 	}
 
 	if (cxl_dcd_supported(mds)) {
-		rc = cxl_event_req_irq(cxlds, policy->dcd_settings);
+		rc = cxl_event_req_irq(mds, policy->dcd_settings);
 		if (rc) {
 			dev_err(cxlds->dev, "Failed to get interrupt for DCD event log\n");
 			cxl_disable_dcd(mds);
@@ -765,11 +841,18 @@ static int cxl_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 
 	irq_avail = cxl_alloc_irq_vectors(pdev);
 
+    mds->cxlds.regs.device_regs.status = cxlds->regs.status;
+	mds->cxlds.cxl_mbox.host = &pdev->dev;
+	mds->cxlds.cxl_mbox.special_irq = cxl_pci_mbox_special_irq;
+	mds->cxlds.cxl_mbox.special_bg = cxl_pci_mbox_special_bg;
+	mds->cxlds.cxl_mbox.get_status = cxl_pci_mbox_get_status;
+	mds->cxlds.cxl_mbox.can_run = cxl_pci_mbox_can_run;
+	mds->cxlds.cxl_mbox.extra_cmds = cxl_pci_mbox_extra_cmds;
 	rc = cxl_pci_setup_mailbox(mds, irq_avail);
 	if (rc)
 		return rc;
 
-	rc = cxl_enumerate_cmds(mds);
+	rc = cxl_enumerate_cmds(&cxlds->cxl_mbox);
 	if (rc)
 		return rc;
 

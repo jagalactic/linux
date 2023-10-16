@@ -124,7 +124,7 @@ static u8 security_command_sets[] = {
 	0x46, /* Security Passthrough */
 };
 
-static bool cxl_is_security_command(u16 opcode)
+bool cxl_is_security_command(u16 opcode)
 {
 	int i;
 
@@ -133,9 +133,10 @@ static bool cxl_is_security_command(u16 opcode)
 			return true;
 	return false;
 }
+EXPORT_SYMBOL_NS_GPL(cxl_is_security_command, "CXL");
 
-static void cxl_set_security_cmd_enabled(struct cxl_security_state *security,
-					 u16 opcode)
+void cxl_set_security_cmd_enabled(struct cxl_security_state *security,
+				  u16 opcode)
 {
 	switch (opcode) {
 	case CXL_MBOX_OP_SANITIZE:
@@ -185,23 +186,24 @@ static void cxl_set_dcd_cmd_enabled(struct cxl_memdev_state *mds,
 {
 	switch (opcode) {
 	case CXL_MBOX_OP_GET_DC_CONFIG:
-		set_bit(CXL_DCD_ENABLED_GET_CONFIG, mds->dcd_cmds);
+		set_bit(CXL_DCD_ENABLED_GET_CONFIG, mds->cxlds.cxl_mbox.dcd_cmds);
 		break;
 	case CXL_MBOX_OP_GET_DC_EXTENT_LIST:
-		set_bit(CXL_DCD_ENABLED_GET_EXTENT_LIST, mds->dcd_cmds);
+		set_bit(CXL_DCD_ENABLED_GET_EXTENT_LIST, mds->cxlds.cxl_mbox.dcd_cmds);
 		break;
 	case CXL_MBOX_OP_ADD_DC_RESPONSE:
-		set_bit(CXL_DCD_ENABLED_ADD_RESPONSE, mds->dcd_cmds);
+		set_bit(CXL_DCD_ENABLED_ADD_RESPONSE, mds->cxlds.cxl_mbox.dcd_cmds);
 		break;
 	case CXL_MBOX_OP_RELEASE_DC:
-		set_bit(CXL_DCD_ENABLED_RELEASE, mds->dcd_cmds);
+		set_bit(CXL_DCD_ENABLED_RELEASE, mds->cxlds.cxl_mbox.dcd_cmds);
 		break;
 	default:
 		break;
 	}
 }
+EXPORT_SYMBOL_NS_GPL(cxl_set_security_cmd_enabled, "CXL");
 
-static bool cxl_is_poison_command(u16 opcode)
+bool cxl_is_poison_command(u16 opcode)
 {
 #define CXL_MBOX_OP_POISON_CMDS 0x43
 
@@ -210,9 +212,10 @@ static bool cxl_is_poison_command(u16 opcode)
 
 	return false;
 }
+EXPORT_SYMBOL_NS_GPL(cxl_is_poison_command, "CXL");
 
-static void cxl_set_poison_cmd_enabled(struct cxl_poison_state *poison,
-				       u16 opcode)
+void cxl_set_poison_cmd_enabled(struct cxl_poison_state *poison,
+				u16 opcode)
 {
 	switch (opcode) {
 	case CXL_MBOX_OP_GET_POISON:
@@ -237,6 +240,7 @@ static void cxl_set_poison_cmd_enabled(struct cxl_poison_state *poison,
 		break;
 	}
 }
+EXPORT_SYMBOL_NS_GPL(cxl_set_poison_cmd_enabled, "CXL");
 
 static struct cxl_mem_command *cxl_mem_find_command(u16 opcode)
 {
@@ -259,6 +263,27 @@ static const char *cxl_mem_opcode_to_name(u16 opcode)
 
 	return cxl_command_names[c->info.id].name;
 }
+
+irqreturn_t cxl_mbox_irq(int irq, struct cxl_mailbox *mbox)
+{
+	u64 reg;
+	u16 opcode;
+	struct cxl_dev_state *cxlds = container_of(mbox, struct cxl_dev_state, cxl_mbox);
+
+	if (!cxl_mbox_background_complete(cxlds))
+		return IRQ_NONE;
+
+	reg = readq(cxlds->regs.mbox + CXLDEV_MBOX_BG_CMD_STATUS_OFFSET);
+	opcode = FIELD_GET(CXLDEV_MBOX_BG_CMD_COMMAND_OPCODE_MASK, reg);
+	if (!mbox->special_irq || !mbox->special_irq(mbox, opcode)) {
+		/* short-circuit the wait in __cxl_pci_mbox_send_cmd() */
+		rcuwait_wake_up(&mbox->mbox_wait);
+	}
+
+	return IRQ_HANDLED;
+}
+EXPORT_SYMBOL_NS_GPL(cxl_mbox_irq, "CXL");
+
 
 int cxl_pci_mbox_wait_for_doorbell(struct cxl_dev_state *cxlds)
 {
@@ -319,7 +344,6 @@ static int __cxl_pci_mbox_send_cmd(struct cxl_mailbox *cxl_mbox,
 				   struct cxl_mbox_cmd *mbox_cmd)
 {
 	struct cxl_dev_state *cxlds = mbox_to_cxlds(cxl_mbox);
-	struct cxl_memdev_state *mds = to_cxl_memdev_state(cxlds);
 	void __iomem *payload = cxlds->regs.mbox + CXLDEV_MBOX_PAYLOAD_OFFSET;
 	struct device *dev = cxlds->dev;
 	u64 cmd_reg, status_reg;
@@ -360,10 +384,8 @@ static int __cxl_pci_mbox_send_cmd(struct cxl_mailbox *cxl_mbox,
 	 * not be in sync. Ensure no new command comes in until so. Keep the
 	 * hardware semantics and only allow device health status.
 	 */
-	if (mds->security.poll_tmo_secs > 0) {
-		if (mbox_cmd->opcode != CXL_MBOX_OP_GET_HEALTH_INFO)
-			return -EBUSY;
-	}
+	if (cxl_mbox->can_run && !cxl_mbox->can_run(cxl_mbox, mbox_cmd->opcode))
+		return -EBUSY;
 
 	cmd_reg = FIELD_PREP(CXLDEV_MBOX_CMD_COMMAND_OPCODE_MASK,
 			     mbox_cmd->opcode);
@@ -420,18 +442,8 @@ static int __cxl_pci_mbox_send_cmd(struct cxl_mailbox *cxl_mbox,
 		 * and cannot be timesliced. Handle asynchronously instead,
 		 * and allow userspace to poll(2) for completion.
 		 */
-		if (mbox_cmd->opcode == CXL_MBOX_OP_SANITIZE) {
-			if (mds->security.sanitize_active)
-				return -EBUSY;
-
-			/* give first timeout a second */
-			timeout = 1;
-			mds->security.poll_tmo_secs = timeout;
-			mds->security.sanitize_active = true;
-			schedule_delayed_work(&mds->security.poll_dwork,
-					      timeout * HZ);
-			dev_dbg(dev, "Sanitization operation started\n");
-			goto success;
+		if (cxl_mbox->special_bg && cxl_mbox->special_bg(cxl_mbox, mbox_cmd->opcode)) {
+ 			goto success;
 		}
 
 		dev_dbg(dev, "Mailbox background operation (0x%04x) started\n",
@@ -730,11 +742,11 @@ static int cxl_to_mem_cmd(struct cxl_mem_command *mem_cmd,
 		return -EINVAL;
 
 	/* Check that the command is enabled for hardware */
-	if (!test_bit(info->id, mds->enabled_cmds))
+	if (!test_bit(info->id, mds->cxlds.cxl_mbox.enabled_cmds))
 		return -ENOTTY;
 
 	/* Check that the command is not claimed for exclusive kernel use */
-	if (test_bit(info->id, mds->exclusive_cmds))
+	if (test_bit(info->id, mds->cxlds.cxl_mbox.exclusive_cmds))
 		return -EBUSY;
 
 	/* Check the input buffer is the expected size */
@@ -836,9 +848,9 @@ int cxl_query_cmd(struct cxl_memdev *cxlmd,
 	cxl_for_each_cmd(cmd) {
 		struct cxl_command_info info = cmd->info;
 
-		if (test_bit(info.id, mds->enabled_cmds))
+		if (test_bit(info.id, mds->cxlds.cxl_mbox.enabled_cmds))
 			info.flags |= CXL_MEM_COMMAND_FLAG_ENABLED;
-		if (test_bit(info.id, mds->exclusive_cmds))
+		if (test_bit(info.id, mds->cxlds.cxl_mbox.exclusive_cmds))
 			info.flags |= CXL_MEM_COMMAND_FLAG_EXCLUSIVE;
 
 		if (copy_to_user(&q->commands[j++], &info, sizeof(info)))
@@ -1021,7 +1033,7 @@ static void cxl_walk_cel(struct cxl_memdev_state *mds, size_t size, u8 *cel)
 		int enabled = 0;
 
 		if (cmd) {
-			set_bit(cmd->info.id, mds->enabled_cmds);
+			set_bit(cmd->info.id, mds->cxlds.cxl_mbox.enabled_cmds);
 			enabled++;
 		}
 
@@ -1094,10 +1106,14 @@ static const uuid_t log_uuid[] = {
  * determine the set of supported commands for the hardware and update the
  * enabled_cmds bitmap in the @mds.
  */
-int cxl_enumerate_cmds(struct cxl_memdev_state *mds)
+int cxl_enumerate_cmds(struct cxl_mailbox *cxl_mbox)
 {
 	struct cxl_mbox_get_supported_logs *gsl;
-	struct device *dev = mds->cxlds.dev;
+    struct cxl_dev_state *cxlds =
+        container_of(cxl_mbox, struct cxl_dev_state, cxl_mbox);
+    struct cxl_memdev_state *mds =
+        container_of(cxlds, struct cxl_memdev_state, cxlds);
+	struct device *dev = cxlds->dev;
 	struct cxl_mem_command *cmd;
 	int i, rc;
 
@@ -1134,7 +1150,7 @@ int cxl_enumerate_cmds(struct cxl_memdev_state *mds)
 		/* In case CEL was bogus, enable some default commands. */
 		cxl_for_each_cmd(cmd)
 			if (cmd->flags & CXL_CMD_FLAG_FORCE_ENABLE)
-				set_bit(cmd->info.id, mds->enabled_cmds);
+				set_bit(cmd->info.id, mds->cxlds.cxl_mbox.enabled_cmds);
 
 		/* Found the required CEL */
 		rc = 0;

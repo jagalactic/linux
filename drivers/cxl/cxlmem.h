@@ -158,15 +158,6 @@ struct cxl_event_state {
 	struct mutex log_lock;
 };
 
-/* Device enabled DCD commands */
-enum dcd_cmd_enabled_bits {
-	CXL_DCD_ENABLED_GET_CONFIG,
-	CXL_DCD_ENABLED_GET_EXTENT_LIST,
-	CXL_DCD_ENABLED_ADD_RESPONSE,
-	CXL_DCD_ENABLED_RELEASE,
-	CXL_DCD_ENABLED_MAX
-};
-
 /* Device enabled poison commands */
 enum poison_cmd_enabled_bits {
 	CXL_POISON_ENABLED_LIST,
@@ -406,9 +397,6 @@ static inline struct cxl_dev_state *mbox_to_cxlds(struct cxl_mailbox *cxl_mbox)
  * @lsa_size: Size of Label Storage Area
  *                (CXL 2.0 8.2.9.5.1.1 Identify Memory Device)
  * @firmware_version: Firmware version for the memory device.
- * @dcd_cmds: List of DCD commands implemented by memory device
- * @enabled_cmds: Hardware commands found enabled in CEL.
- * @exclusive_cmds: Commands that are kernel-internal only
  * @total_bytes: length of all possible capacities
  * @static_bytes: length of possible static RAM and PMEM partitions
  * @dynamic_bytes: length of possible DC partitions (DC Regions)
@@ -436,9 +424,6 @@ struct cxl_memdev_state {
 	struct cxl_dev_state cxlds;
 	size_t lsa_size;
 	char firmware_version[0x10];
-	DECLARE_BITMAP(dcd_cmds, CXL_DCD_ENABLED_MAX);
-	DECLARE_BITMAP(enabled_cmds, CXL_MEM_COMMAND_ID_MAX);
-	DECLARE_BITMAP(exclusive_cmds, CXL_MEM_COMMAND_ID_MAX);
 	u64 total_bytes;
 	u64 static_bytes;
 	u64 dynamic_bytes;
@@ -799,12 +784,18 @@ enum {
 	CXL_PMEM_SEC_PASS_USER,
 };
 
-int cxl_internal_send_cmd(struct cxl_mailbox *cxl_mbox,
-			  struct cxl_mbox_cmd *cmd);
+
+bool cxl_is_poison_command(u16 opcode);
+void cxl_set_poison_cmd_enabled(struct cxl_poison_state *poison,
+				u16 opcode);
+
+bool cxl_is_security_command(u16 opcode);
+void cxl_set_security_cmd_enabled(struct cxl_security_state *security,
+				  u16 opcode);
 int cxl_dev_state_identify(struct cxl_memdev_state *mds);
 int cxl_dev_dynamic_capacity_identify(struct cxl_memdev_state *mds);
 int cxl_await_media_ready(struct cxl_dev_state *cxlds);
-int cxl_enumerate_cmds(struct cxl_memdev_state *mds);
+// int cxl_enumerate_cmds(struct cxl_memdev_state *mds);
 int cxl_mem_create_range_info(struct cxl_memdev_state *mds);
 struct cxl_memdev_state *cxl_memdev_state_create(struct device *dev);
 void set_exclusive_cxl_commands(struct cxl_memdev_state *mds,
@@ -819,12 +810,12 @@ void cxl_event_trace_record(const struct cxl_memdev *cxlmd,
 
 static inline bool cxl_dcd_supported(struct cxl_memdev_state *mds)
 {
-	return test_bit(CXL_DCD_ENABLED_GET_CONFIG, mds->dcd_cmds);
+	return test_bit(CXL_DCD_ENABLED_GET_CONFIG, mds->cxlds.cxl_mbox.dcd_cmds);
 }
 
 static inline void cxl_disable_dcd(struct cxl_memdev_state *mds)
 {
-	clear_bit(CXL_DCD_ENABLED_GET_CONFIG, mds->dcd_cmds);
+	clear_bit(CXL_DCD_ENABLED_GET_CONFIG, mds->cxlds.cxl_mbox.dcd_cmds);
 }
 
 int cxl_set_timestamp(struct cxl_memdev_state *mds);

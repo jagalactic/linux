@@ -3,7 +3,17 @@
 #ifndef __CXLMBOX_H__
 #define __CXLMBOX_H__
 
+#include <linux/irqreturn.h>
+#include <linux/export.h>
+#include <linux/io.h>
+
+#include <uapi/linux/cxl_mem.h>
+
+#include <cxl/mailbox.h>
+
 struct cxl_dev_state;
+
+irqreturn_t cxl_mbox_irq(int irq, struct cxl_mailbox *mbox);
 int cxl_pci_mbox_wait_for_doorbell(struct cxl_dev_state *cxlds);
 bool cxl_mbox_background_complete(struct cxl_dev_state *cxlds);
 
@@ -151,4 +161,8 @@ enum cxl_opcode {
 	CXL_MBOX_OP_MAX			= 0x10000
 };
 
+int cxl_internal_send_cmd(struct cxl_mailbox *cxl_mbox, struct cxl_mbox_cmd *cmd);
+int cxl_enumerate_cmds(struct cxl_mailbox *cxl_mbox);
+
 #endif /* __CXLMBOX_H__ */
+

@@ -6,6 +6,7 @@
 #include <linux/async.h>
 #include <linux/slab.h>
 #include <linux/memregion.h>
+#include "cxlmbox.h"
 #include "cxlmem.h"
 #include "cxl.h"
 
