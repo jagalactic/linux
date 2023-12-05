@@ -10,6 +10,12 @@
 #include "dax-private.h"
 #include "bus.h"
 
+#if IS_ENABLED(CONFIG_DEV_DAX_IOMAP)
+#include <linux/backing-dev.h>
+#include <linux/pfn_t.h>
+#include <linux/range.h>
+#endif
+
 static DEFINE_MUTEX(dax_bus_lock);
 
 #define DAX_NAME_LEN 30
@@ -1374,6 +1380,100 @@ phys_addr_t dax_pgoff_to_phys(struct dev_dax *dev_dax, pgoff_t pgoff,
 }
 
 
+/* the phys address approach */
+long __dev_dax_direct_access(struct dax_device *dax_dev, pgoff_t pgoff,
+			     long nr_pages, enum dax_access_mode mode, void **kaddr,
+			     pfn_t *pfn)
+{
+	struct dev_dax *dev_dax = dax_get_private(dax_dev);
+	size_t size = nr_pages << PAGE_SHIFT;
+	size_t offset = pgoff << PAGE_SHIFT;
+	long range_remainder = 0;
+	phys_addr_t phys;
+	int i;
+
+	/*
+	 * pmem hides dax ranges by mapping  to a contiguous
+	 * pmem->virt_addr = devm_mremap_pages() (in pem_attach_disk()).
+	 * Is it legal to avoid the vmap overhead (and resource consumption) and just return
+	 * a (potentially partial) phys range? This function does this, returning the
+	 * phys_addr with the length truncated if necessary to the range remainder
+	 */
+	phys = dax_pgoff_to_phys(dev_dax, pgoff, nr_pages << PAGE_SHIFT);
+
+	if (kaddr)
+		*kaddr = (void *)phys;
+
+	if (pfn)
+		*pfn = phys_to_pfn_t(phys, PFN_DEV|PFN_MAP); /* are flags correct? */
+
+	/*
+	 * If dax_pgoff_to_phys() also returned the range remainder (range_len - range_offset)
+	 * this loop would not be necessary
+	 */
+	for (i = 0; i < dev_dax->nr_range; i++) {
+		size_t rlen = range_len(&(dev_dax->ranges[i].range));
+
+		if (offset < rlen) {
+			range_remainder = rlen - offset;
+			break;
+		}
+		offset -= rlen;
+	}
+
+	/*
+	 * Return length valid at phys. Hoping callers can deal with len < entire_dax_device
+	 * (or < npages). This returns the remaining length in the applicable dax region.
+	 */
+	return PHYS_PFN(min_t(size_t, range_remainder, size));
+}
+
+static int dev_dax_zero_page_range(struct dax_device *dax_dev, pgoff_t pgoff,
+				    size_t nr_pages)
+{
+	long resid = nr_pages << PAGE_SHIFT;
+	long offset = pgoff << PAGE_SHIFT;
+
+	/* Break into one write per dax region */
+	while (resid > 0) {
+		void *kaddr;
+		pgoff_t poff = offset >> PAGE_SHIFT;
+		long len = __dev_dax_direct_access(dax_dev, poff,
+						   nr_pages, DAX_ACCESS, &kaddr, NULL);
+		len = min_t(long, len, PAGE_SIZE);
+		write_dax(kaddr, ZERO_PAGE(0), offset, len);
+
+		offset += len;
+		resid  -= len;
+	}
+	return 0;
+}
+
+static long dev_dax_direct_access(struct dax_device *dax_dev,
+		pgoff_t pgoff, long nr_pages, enum dax_access_mode mode,
+		void **kaddr, pfn_t *pfn)
+{
+	return __dev_dax_direct_access(dax_dev, pgoff, nr_pages, mode, kaddr, pfn);
+}
+
+static size_t dev_dax_recovery_write(struct dax_device *dax_dev, pgoff_t pgoff,
+		void *addr, size_t bytes, struct iov_iter *i)
+{
+	size_t len, off;
+
+	off = offset_in_page(addr);
+	len = PFN_PHYS(PFN_UP(off + bytes));
+
+	return _copy_from_iter_flushcache(addr, bytes, i);
+}
+
+static const struct dax_operations dev_dax_ops = {
+	.direct_access = dev_dax_direct_access,
+	.zero_page_range = dev_dax_zero_page_range,
+	.recovery_write = dev_dax_recovery_write,
+};
+#endif /* IS_ENABLED(CONFIG_DEV_DAX_IOMAP) */
+
 struct dev_dax *devm_create_dev_dax(struct dev_dax_data *data)
 {
 	struct dax_region *dax_region = data->dax_region;
@@ -1429,11 +1529,16 @@ struct dev_dax *devm_create_dev_dax(struct dev_dax_data *data)
 		}
 	}
 
+#if IS_ENABLED(CONFIG_DEV_DAX_IOMAP)
+	/* holder_ops currently populated separately in a slightly hacky way */
+	dax_dev = alloc_dax(dev_dax, &dev_dax_ops);
+#else
 	/*
 	 * No dax_operations since there is no access to this device outside of
 	 * mmap of the resulting character device.
 	 */
 	dax_dev = alloc_dax(dev_dax, NULL);
+#endif
 	if (IS_ERR(dax_dev)) {
 		rc = PTR_ERR(dax_dev);
 		goto err_alloc_dax;
