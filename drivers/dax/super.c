@@ -467,6 +467,22 @@ struct dax_device *alloc_dax(void *private, const struct dax_operations *ops)
 }
 EXPORT_SYMBOL_GPL(alloc_dax);
 
+#if IS_ENABLED(CONFIG_DEV_DAX_IOMAP)
+/* famfs calls this to add the holder_ops. There is probably a more elegant approach */
+int add_dax_ops(
+	struct dax_device           *dax_dev,
+	const struct dax_holder_operations *hops)
+{
+	/* dax_dev->ops should have been populated by devm_create_dev_dax() */
+	WARN_ON(!dax_dev->ops);
+
+	/* Use cmpxchg? */
+	dax_dev->holder_ops = hops;
+	return 0;
+}
+EXPORT_SYMBOL_GPL(add_dax_ops);
+#endif /* DEV_DAX_IOMAP */
+
 void put_dax(struct dax_device *dax_dev)
 {
 	if (!dax_dev)
