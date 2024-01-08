@@ -1492,9 +1492,11 @@ int __ref add_memory_resource(int nid, struct resource *res, mhp_t mhp_flags)
 		merge_system_ram_resource(res);
 
 	/* online pages if requested */
-	if (mhp_default_online_type != MMOP_OFFLINE)
+	/* JG */
+	if (mhp_default_online_type != MMOP_OFFLINE) {
+		dump_stack();
 		walk_memory_blocks(start, size, NULL, online_memory_block);
-
+	}
 	return ret;
 error_free:
 	kfree(params.altmap);
