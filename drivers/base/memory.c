@@ -995,6 +995,9 @@ int walk_memory_blocks(unsigned long start, unsigned long size,
 	if (!size)
 		return 0;
 
+	pr_err("%s: start=0x%lu size=0x%lu start_id=0x%lu end_id=0x%lu\n",
+	       __func__, start, size, start_block_id, end_block_id);
+
 	for (block_id = start_block_id; block_id <= end_block_id; block_id++) {
 		mem = find_memory_block_by_id(block_id);
 		if (!mem)

@@ -1495,6 +1495,7 @@ int __ref add_memory_resource(int nid, struct resource *res, mhp_t mhp_flags)
 	/* JG */
 	if (mhp_default_online_type != MMOP_OFFLINE) {
 		dump_stack();
+		pr_err("%s: online: start=0x%llx size=0x%llx\n", __func__, start, size);
 		walk_memory_blocks(start, size, NULL, online_memory_block);
 	}
 	return ret;
@@ -1562,6 +1563,8 @@ int add_memory_driver_managed(int nid, u64 start, u64 size,
 {
 	struct resource *res;
 	int rc;
+
+	pr_err("%s: start=0x%llx size=0x%llx\n", __func__, start, size);
 
 	if (!resource_name ||
 	    strstr(resource_name, "System RAM (") != resource_name ||
@@ -2170,6 +2173,7 @@ static int __ref try_remove_memory(u64 start, u64 size)
 	 * we'd only try to offline the last determined one -- which is good
 	 * enough for the cases we care about.
 	 */
+	pr_err("%s: check_offlined: start=0x%llx size=0x%llx\n", __func__, start, size);
 	rc = walk_memory_blocks(start, size, &nid, check_memblock_offlined_cb);
 	if (rc)
 		return rc;
@@ -2179,6 +2183,8 @@ static int __ref try_remove_memory(u64 start, u64 size)
 	 * the same granularity it was added - a single memory block.
 	 */
 	if (mhp_memmap_on_memory()) {
+		pr_err("%s: get_nr_vmemmap...: start=0x%llx size=0x%llx\n",
+		       __func__, start, size);
 		rc = walk_memory_blocks(start, size, &mem, test_has_altmap_cb);
 		if (rc) {
 			if (size != memory_block_size_bytes()) {
@@ -2257,6 +2263,7 @@ int remove_memory(u64 start, u64 size)
 {
 	int rc;
 
+	pr_err("%s: start=0x%llx size=0x%llx\n", __func__, start, size);
 	lock_device_hotplug();
 	rc = try_remove_memory(start, size);
 	unlock_device_hotplug();
@@ -2271,6 +2278,8 @@ static int try_offline_memory_block(struct memory_block *mem, void *arg)
 	uint8_t **online_types = arg;
 	struct page *page;
 	int rc;
+
+	pr_err("%s: section=0x%lx\n", __func__, mem->start_section_nr);
 
 	/*
 	 * Sense the online_type via the zone of the memory block. Offlining
@@ -2298,6 +2307,8 @@ static int try_reonline_memory_block(struct memory_block *mem, void *arg)
 {
 	uint8_t **online_types = arg;
 	int rc;
+
+	pr_err("%s: section=0x%lx\n", __func__, mem->start_section_nr);
 
 	if (**online_types != MMOP_OFFLINE) {
 		mem->online_type = **online_types;
@@ -2347,6 +2358,7 @@ int offline_and_remove_memory(u64 start, u64 size)
 	lock_device_hotplug();
 
 	tmp = online_types;
+	pr_err("%s: try_offline: start=0x%llx size=0x%llx\n", __func__, start, size);
 	rc = walk_memory_blocks(start, size, &tmp, try_offline_memory_block);
 
 	/*
@@ -2365,6 +2377,7 @@ int offline_and_remove_memory(u64 start, u64 size)
 	 */
 	if (rc) {
 		tmp = online_types;
+		pr_err("%s: try_reonline: start=0x%llx size=0x%llx\n", __func__, start, size);
 		walk_memory_blocks(start, size, &tmp,
 				   try_reonline_memory_block);
 	}
