@@ -1387,20 +1387,42 @@ long __dev_dax_direct_access(struct dax_device *dax_dev, pgoff_t pgoff,
 	size_t offset = pgoff << PAGE_SHIFT;
 	phys_addr_t phys;
 	u64 virt_addr = dev_dax->virt_addr + offset;
+	pfn_t local_pfn;
+	u64 flags = PFN_DEV|PFN_MAP;
 
 	BUG_ON(!dev_dax->virt_addr); /* virt_addr must be saved for direct_access */
 
 	phys = dax_pgoff_to_phys(dev_dax, pgoff, nr_pages << PAGE_SHIFT);
 
-	pr_err("%s: base_virt=%llx offset=%llx virt_addr=%llx\n", __func__,
-	       (u64)dev_dax->virt_addr, (u64)offset, (u64)virt_addr);
-
 	if (kaddr)
 		*kaddr = (void *)virt_addr;
 
+	local_pfn = phys_to_pfn_t(phys, flags); /* are flags correct? */
 	if (pfn)
-		*pfn = phys_to_pfn_t(phys, PFN_DEV|PFN_MAP); /* are flags correct? */
+		*pfn = local_pfn;
 
+	pr_err("%s: base_virt=%llx offset=%llx virt_addr=%llx phys=%llx pfn %llx flags %lld\n",
+	       __func__,
+	       (u64)dev_dax->virt_addr, (u64)offset, (u64)virt_addr, (u64)phys, (u64)local_pfn.val,
+	       (u64)flags);
+	if (1) {
+		/* Try accessing the memory*/
+		u64 *val;
+		u64 kva;
+		struct page *page = pfn_to_page(local_pfn.val);
+
+		// Check if the page is mapped in virtual memory
+		if (page_mapped(page))
+			kva = (u64)page_to_virt(page);
+		else
+			kva = 0;
+
+		val = (u64 *)virt_addr;
+		pr_notice("%s: val at virt_addr=%llx val=%llx\n", __func__, (u64)val, *val);
+		pr_notice("%s: kva=%llx\n", __func__, kva);
+	}
+
+	/* This the valid size at the specified address */
 	return PHYS_PFN(min_t(size_t, size, dax_size - offset));
 }
 

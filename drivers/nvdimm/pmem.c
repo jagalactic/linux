@@ -250,11 +250,14 @@ __weak long __pmem_direct_access(struct pmem_device *pmem, pgoff_t pgoff,
 	struct badblocks *bb = &pmem->bb;
 	sector_t first_bad;
 	int num_bad;
+	pfn_t local_pfn;
 
 	if (kaddr)
 		*kaddr = pmem->virt_addr + offset;
+
+	local_pfn = phys_to_pfn_t(pmem->phys_addr + offset, pmem->pfn_flags);
 	if (pfn)
-		*pfn = phys_to_pfn_t(pmem->phys_addr + offset, pmem->pfn_flags);
+		*pfn = local_pfn;
 
 	if (bb->count &&
 	    badblocks_check(bb, sector, num, &first_bad, &num_bad)) {
@@ -275,6 +278,18 @@ __weak long __pmem_direct_access(struct pmem_device *pmem, pgoff_t pgoff,
 		if (actual_nr)
 			return actual_nr;
 		return 1;
+	}
+
+	pr_err("%s: base_virt=%llx offset=%llx virt_addr=%llx phys=%llx pfn %llx flags %lld\n",
+	       __func__,
+	       (u64)pmem->virt_addr, (u64)offset, (u64)*kaddr, (u64)pmem->phys_addr,
+	       (u64)local_pfn.val, (u64)pmem->pfn_flags);
+	if (1) {
+		/* Try accessing the memory*/
+		u64 *val;
+
+		val = (u64 *)*kaddr;
+		pr_notice("%s: val at virt_addr=%llx val=%llx\n", __func__, (u64)val, *val);
 	}
 
 	/*
@@ -506,6 +521,7 @@ static int pmem_attach_disk(struct device *dev,
 	pmem->pgmap.owner = pmem;
 	pmem->pfn_flags = PFN_DEV;
 	if (is_nd_pfn(dev)) {
+		pr_err("%s: branch 1\n", __func__);
 		pmem->pgmap.type = MEMORY_DEVICE_FS_DAX;
 		pmem->pgmap.ops = &fsdax_pagemap_ops;
 		addr = devm_memremap_pages(dev, &pmem->pgmap);
@@ -517,6 +533,7 @@ static int pmem_attach_disk(struct device *dev,
 		bb_range = pmem->pgmap.range;
 		bb_range.start += pmem->data_offset;
 	} else if (pmem_should_map_pages(dev)) {
+		pr_err("%s: branch 2\n", __func__);
 		pmem->pgmap.range.start = res->start;
 		pmem->pgmap.range.end = res->end;
 		pmem->pgmap.nr_range = 1;
@@ -526,6 +543,7 @@ static int pmem_attach_disk(struct device *dev,
 		pmem->pfn_flags |= PFN_MAP;
 		bb_range = pmem->pgmap.range;
 	} else {
+		pr_err("%s: branch 3\n", __func__);
 		addr = devm_memremap(dev, pmem->phys_addr,
 				pmem->size, ARCH_MEMREMAP_PMEM);
 		bb_range.start =  res->start;
