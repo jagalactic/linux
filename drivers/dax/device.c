@@ -418,13 +418,15 @@ static int dev_dax_probe(struct dev_dax *dev_dax)
 		}
 	}
 
-	pgmap->type = MEMORY_DEVICE_GENERIC;
+	pgmap->type = MEMORY_DEVICE_GENERIC; /* Should this be MEMORY_DEVICE_FS_DAX? */
 	if (dev_dax->align > PAGE_SIZE)
 		pgmap->vmemmap_shift =
 			order_base_2(dev_dax->align >> PAGE_SHIFT);
 	addr = devm_memremap_pages(dev, pgmap);
 	if (IS_ERR(addr))
 		return PTR_ERR(addr);
+
+	dev_dax->virt_addr = (u64)addr; /* Save the address for fs-dax callers like famfs */
 
 	inode = dax_inode(dax_dev);
 	cdev = inode->i_cdev;
