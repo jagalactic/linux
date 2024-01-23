@@ -1405,22 +1405,9 @@ long __dev_dax_direct_access(struct dax_device *dax_dev, pgoff_t pgoff,
 	       __func__,
 	       (u64)dev_dax->virt_addr, (u64)offset, (u64)virt_addr, (u64)phys, (u64)local_pfn.val,
 	       (u64)flags);
-	if (1) {
-		/* Try accessing the memory*/
-		u64 *val;
-		u64 kva;
-		struct page *page = pfn_to_page(local_pfn.val);
 
-		// Check if the page is mapped in virtual memory
-		if (page_mapped(page))
-			kva = (u64)page_to_virt(page);
-		else
-			kva = 0;
-
-		val = (u64 *)virt_addr;
-		pr_notice("%s: val at virt_addr=%llx val=%llx\n", __func__, (u64)val, *val);
-		pr_notice("%s: kva=%llx\n", __func__, kva);
-	}
+	if (WARN_ON((u64)page_to_virt(pfn_to_page(local_pfn.val)) != virt_addr))
+		pr_err("%s: you might be running pmem-converted-to-devdax\n", __func__);
 
 	/* This the valid size at the specified address */
 	return PHYS_PFN(min_t(size_t, size, dax_size - offset));

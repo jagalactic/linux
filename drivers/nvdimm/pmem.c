@@ -284,13 +284,6 @@ __weak long __pmem_direct_access(struct pmem_device *pmem, pgoff_t pgoff,
 	       __func__,
 	       (u64)pmem->virt_addr, (u64)offset, (u64)*kaddr, (u64)pmem->phys_addr,
 	       (u64)local_pfn.val, (u64)pmem->pfn_flags);
-	if (1) {
-		/* Try accessing the memory*/
-		u64 *val;
-
-		val = (u64 *)*kaddr;
-		pr_notice("%s: val at virt_addr=%llx val=%llx\n", __func__, (u64)val, *val);
-	}
 
 	/*
 	 * If badblocks are present but not in the range, limit known good range
@@ -554,6 +547,7 @@ static int pmem_attach_disk(struct device *dev,
 		rc = PTR_ERR(addr);
 		goto out;
 	}
+	pr_err("%s: kva=%llx\n", __func__, (u64)addr);
 	pmem->virt_addr = addr;
 
 	blk_queue_write_cache(q, true, fua);

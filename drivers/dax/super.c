@@ -121,6 +121,57 @@ void fs_put_dax(struct dax_device *dax_dev, void *holder)
 EXPORT_SYMBOL_GPL(fs_put_dax);
 #endif /* CONFIG_BLOCK && CONFIG_FS_DAX */
 
+#if IS_ENABLED(CONFIG_DEV_DAX_IOMAP)
+
+/**
+ * fs_dax_get()
+ *
+ * Prepare to use a devdax device for fsdax
+ *
+ * @dax_dev
+ * @holder
+ * @hops
+ */
+int fs_dax_get(
+	struct dax_device *dax_dev,
+	void *holder,
+	const struct dax_holder_operations *hops)
+{
+	/* dax_dev->ops should have been populated by devm_create_dev_dax() */
+	WARN_ON(!dax_dev->ops);
+
+	if (!dax_dev || !dax_alive(dax_dev) || !igrab(&dax_dev->inode))
+		return -1;
+
+	if (cmpxchg(&dax_dev->holder_data, NULL, holder)) {
+		pr_warn("%s: holder_data already set\n", __func__);
+		return -1;
+	}
+	dax_dev->holder_ops = hops;
+
+#if 0
+	/* The purpose of this function is to enable the calling file system
+	 * to use the dax_iomap_rw() and dax_iomap_fault() interfaces. It is
+	 * inappropriate for any pages to remain in the dax inode's i_mapping (page cache)
+	 * because they will be accessed through individual file page caches instead.
+	 * So truncate dax_dev->inode->i_mapping.
+	 */
+	if (!down_write_trylock(&dax_dev->inode.i_rwsem)) {
+		pr_err("%s: unable to lock dax inode\n", __func__);
+		goto out;
+	}
+
+	truncate_inode_pages(dax_dev->inode.i_mapping, 0);
+	up_write(&dax_dev->inode.i_rwsem);
+
+out:
+#endif
+	return 0;
+}
+EXPORT_SYMBOL_GPL(fs_dax_get);
+#endif /* DEV_DAX_IOMAP */
+
+
 enum dax_device_flags {
 	/* !alive + rcu grace period == no new operations / mappings */
 	DAXDEV_ALIVE,
@@ -525,52 +576,6 @@ struct dax_device *alloc_dax(void *private, const struct dax_operations *ops)
 	return ERR_PTR(-ENOMEM);
 }
 EXPORT_SYMBOL_GPL(alloc_dax);
-
-#if IS_ENABLED(CONFIG_DEV_DAX_IOMAP)
-
-/**
- * fs_dax_get()
- *
- * Prepare to use a devdax device for fsdax
- *
- * @dax_dev
- * @holder
- * @hops
- */
-int fs_dax_get(
-	struct dax_device *dax_dev,
-	void *holder,
-	const struct dax_holder_operations *hops)
-{
-	/* dax_dev->ops should have been populated by devm_create_dev_dax() */
-	WARN_ON(!dax_dev->ops);
-
-	if (cmpxchg(&dax_dev->holder_data, NULL, holder)) {
-		pr_warn("%s: holder_data already set\n", __func__);
-		return -1;
-	}
-	dax_dev->holder_ops = hops;
-
-
-	/* The purpose of this funcction is to enable the calling file system
-	 * to use the dax_iomap_rw() and dax_iomap_fault() interfaces. It is
-	 * inappropriate for any pages to remain in the dax inode's i_mapping (page cache)
-	 * because they will be accessed through individual file page caches instead.
-	 * So truncate dax_dev->inode->i_mapping.
-	 */
-	if (!down_write_trylock(&dax_dev->inode.i_rwsem)) {
-		pr_err("%s: unable to lock dax inode\n", __func__);
-		goto out;
-	}
-
-	truncate_inode_pages(dax_dev->inode.i_mapping, 0);
-	up_write(&dax_dev->inode.i_rwsem);
-
-out:
-	return 0;
-}
-EXPORT_SYMBOL_GPL(fs_dax_get);
-#endif /* DEV_DAX_IOMAP */
 
 void put_dax(struct dax_device *dax_dev)
 {
