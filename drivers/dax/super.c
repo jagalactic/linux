@@ -149,28 +149,10 @@ int fs_dax_get(
 	}
 	dax_dev->holder_ops = hops;
 
-#if 0
-	/* The purpose of this function is to enable the calling file system
-	 * to use the dax_iomap_rw() and dax_iomap_fault() interfaces. It is
-	 * inappropriate for any pages to remain in the dax inode's i_mapping (page cache)
-	 * because they will be accessed through individual file page caches instead.
-	 * So truncate dax_dev->inode->i_mapping.
-	 */
-	if (!down_write_trylock(&dax_dev->inode.i_rwsem)) {
-		pr_err("%s: unable to lock dax inode\n", __func__);
-		goto out;
-	}
-
-	truncate_inode_pages(dax_dev->inode.i_mapping, 0);
-	up_write(&dax_dev->inode.i_rwsem);
-
-out:
-#endif
 	return 0;
 }
 EXPORT_SYMBOL_GPL(fs_dax_get);
 #endif /* DEV_DAX_IOMAP */
-
 
 enum dax_device_flags {
 	/* !alive + rcu grace period == no new operations / mappings */
@@ -235,79 +217,20 @@ size_t dax_copy_from_iter(struct dax_device *dax_dev, pgoff_t pgoff, void *addr,
 	return _copy_from_iter(addr, bytes, i);
 }
 
-static const char *iov_iter_type_string(const struct iov_iter *i)
-{
-	switch (i->iter_type) {
-	case ITER_UBUF:
-		return "ITER_UBUF";
-	case ITER_IOVEC:
-		return "ITER_IOVEC";
-	case ITER_BVEC:
-		return "ITER_BVEC";
-	case ITER_KVEC:
-		return "ITER_KVEC";
-	case ITER_XARRAY:
-		return "ITER_XARRAY";
-	case ITER_DISCARD:
-		return "ITER_DISCARD";
-	}
-	return "ITER_INVALID";
-}
-
-static void dump_iov_iter(struct iov_iter *i, const char *caller)
-{
-	pr_err("%s: iter(%s) copy_mc=%s nofault=%s data_src=%s iov_offset=%llx addr=%llx len=%llx\n",
-	       caller, iov_iter_type_string(i),
-	       i->copy_mc ? "TRUE" : "FALSE",
-	       i->nofault ? "TRUE" : "FALSE",
-	       i->data_source ? "TRUE" : "FALSE",
-	       (u64)i->iov_offset,
-	       (u64)iter_iov_addr(i), (u64)iter_iov_len(i));
-
-	switch (i->iter_type) {
-	case ITER_UBUF:
-		pr_err("\tiov_base=%llx iov_len=%llx nr_segs=%lld\n",
-		       (u64)i->__ubuf_iovec.iov_base, (u64)i->__ubuf_iovec.iov_len, (u64)i->nr_segs);
-		break;
-	case ITER_IOVEC:
-		break;
-	case ITER_BVEC:
-		break;
-	case ITER_KVEC:
-		break;
-	case ITER_XARRAY:
-		break;
-	case ITER_DISCARD:
-		break;
-	}
-
-}
-
 size_t dax_copy_to_iter(struct dax_device *dax_dev, pgoff_t pgoff, void *addr,
 		size_t bytes, struct iov_iter *i)
 {
-	size_t rc;
-
 	if (!dax_alive(dax_dev))
 		return 0;
 
-	pr_err("%s(%s): pgoff=%llx addr=%llx bytes=%lld \n", __func__, iov_iter_type_string(i),
-	       (u64)pgoff, (u64)addr, (u64)bytes);
-	dump_iov_iter(i, __func__);
 	/*
 	 * The userspace address for the memory copy has already been validated
 	 * via access_ok() in vfs_red, so use the 'no check' version to bypass
 	 * the HARDENED_USERCOPY overhead.
 	 */
-	i->copy_mc = true;
 	if (test_bit(DAXDEV_NOMC, &dax_dev->flags))
-		rc = _copy_mc_to_iter(addr, bytes, i);
-	else
-		rc = _copy_to_iter(addr, bytes, i);
-
-	pr_err("%s: after rc=%lld\n", __func__, (u64)rc);
-	dump_iov_iter(i, __func__);
-	return rc;
+		return _copy_mc_to_iter(addr, bytes, i);
+	return _copy_to_iter(addr, bytes, i);
 }
 
 int dax_zero_page_range(struct dax_device *dax_dev, pgoff_t pgoff,
