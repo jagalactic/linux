@@ -536,7 +536,7 @@ static int pmem_attach_disk(struct device *dev,
 		rc = PTR_ERR(addr);
 		goto out;
 	}
-	pr_err("%s: kva=%llx\n", __func__, (u64)addr);
+	pr_notice("%s: kva=%llx\n", __func__, (u64)addr);
 	pmem->virt_addr = addr;
 
 	blk_queue_write_cache(q, true, fua);

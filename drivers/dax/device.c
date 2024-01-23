@@ -426,7 +426,7 @@ static int dev_dax_probe(struct dev_dax *dev_dax)
 	if (IS_ERR(addr))
 		return PTR_ERR(addr);
 
-	pr_err("%s: kva=%llx\n", __func__, (u64)addr);
+	pr_notice("%s: kva=%llx\n", __func__, (u64)addr);
 	dev_dax->virt_addr = (u64)addr; /* Save the address for fs-dax callers like famfs */
 
 	inode = dax_inode(dax_dev);
