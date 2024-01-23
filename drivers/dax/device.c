@@ -418,7 +418,7 @@ static int dev_dax_probe(struct dev_dax *dev_dax)
 		}
 	}
 
-	pgmap->type = MEMORY_DEVICE_GENERIC; /* Should this be MEMORY_DEVICE_FS_DAX? */
+	pgmap->type = MEMORY_DEVICE_FS_DAX; /* Should this be MEMORY_DEVICE_FS_DAX? */
 	if (dev_dax->align > PAGE_SIZE)
 		pgmap->vmemmap_shift =
 			order_base_2(dev_dax->align >> PAGE_SHIFT);
