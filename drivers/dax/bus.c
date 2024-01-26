@@ -1402,7 +1402,8 @@ long __dev_dax_direct_access(struct dax_device *dax_dev, pgoff_t pgoff,
 		*pfn = local_pfn;
 
 	if (WARN_ON_ONCE((u64)page_to_virt(pfn_to_page(local_pfn.val)) != virt_addr))
-		pr_err("%s: you might be running pmem-converted-to-devdax\n", __func__);
+		pr_err("%s: kva horkages detected; pmem-converted-to-devdax currently broken\n",
+		       __func__);
 
 	/* This the valid size at the specified address */
 	return PHYS_PFN(min_t(size_t, size, dax_size - offset));
