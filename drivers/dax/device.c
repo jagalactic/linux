@@ -372,14 +372,13 @@ static int dev_dax_probe(struct dev_dax *dev_dax)
 	struct dax_device *dax_dev = dev_dax->dax_dev;
 	struct device *dev = &dev_dax->dev;
 	struct dev_pagemap *pgmap;
-	u64 skip_offset = 0;
-	struct cdev *cdev;
+	u64 data_offset = 0;
 	struct inode *inode;
+	struct cdev *cdev;
 	void *addr;
 	int rc, i;
 
 	if (static_dev_dax(dev_dax))  {
-		pr_notice("%s: branch 1\n", __func__);
 		if (dev_dax->nr_range > 1) {
 			dev_warn(dev,
 				"static pgmap / multi-range device conflict\n");
@@ -388,7 +387,6 @@ static int dev_dax_probe(struct dev_dax *dev_dax)
 
 		pgmap = dev_dax->pgmap;
 	} else {
-		pr_notice("%s: branch 2\n", __func__);
 		if (dev_dax->pgmap) {
 			dev_warn(dev,
 				 "dynamic-dax with pre-populated page map\n");
@@ -419,11 +417,9 @@ static int dev_dax_probe(struct dev_dax *dev_dax)
 					i, range->start, range->end);
 			return -EBUSY;
 		}
-		pr_notice("%s: range=%d start=%llx len=%llx\n", __func__, i, (u64)range->start,
-			  (u64)(range->end + 1 - range->start));
 	}
 
-	pgmap->type = MEMORY_DEVICE_FS_DAX; /* Should this be MEMORY_DEVICE_FS_DAX? */
+	pgmap->type = MEMORY_DEVICE_GENERIC;
 	if (dev_dax->align > PAGE_SIZE)
 		pgmap->vmemmap_shift =
 			order_base_2(dev_dax->align >> PAGE_SHIFT);
@@ -431,25 +427,17 @@ static int dev_dax_probe(struct dev_dax *dev_dax)
 	if (IS_ERR(addr))
 		return PTR_ERR(addr);
 
-	/* phys is 0 - must not be harvesting that correctly */
-	pr_notice("%s: pgoff=%llx phys0=%llx kva=%llx\n", __func__, (u64)dev_dax->ranges[0].pgoff,
-		  (u64)dev_dax->ranges[0].range.start, (u64)addr);
-	for (i = 0; i < dev_dax->nr_range; i++) {
-		u64 start = (u64)dev_dax->pgmap[i].range.start;
-		u64 len = (u64)dev_dax->pgmap[i].range.end + 1 - start;
-
-		pr_notice("%s: pgmap %d start=%llx len=%llx\n", __func__, i, start, len);
-	}
+	/* Detect whether the data is at a non-zero offset into the memory */
 	if (pgmap->range.start != dev_dax->ranges[0].range.start) {
 		u64 phys = (u64)dev_dax->ranges[0].range.start;
 		u64 pgmap_phys = (u64)dev_dax->pgmap[0].range.start;
 
 		WARN_ON(pgmap_phys > phys);
-		skip_offset = phys - pgmap_phys;
-		pr_err("%s: offset detected phys=%llx pgmap_phys=%llx offset=%llx\n",
-		       __func__, phys, pgmap_phys, skip_offset);
+		data_offset = phys - pgmap_phys;
+		pr_err("%s: offset detected phys=%llx pgmap_phys=%llx offset=%llx shift=%llx\n",
+		       __func__, phys, pgmap_phys, data_offset, );
 	}
-	dev_dax->virt_addr = (u64)addr + skip_offset; /* Save the address for fs-dax callers like famfs */
+	dev_dax->virt_addr = (u64)addr + data_offset;
 
 	inode = dax_inode(dax_dev);
 	cdev = inode->i_cdev;
