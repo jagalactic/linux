@@ -431,11 +431,12 @@ static int dev_dax_probe(struct dev_dax *dev_dax)
 	if (pgmap->range.start != dev_dax->ranges[0].range.start) {
 		u64 phys = (u64)dev_dax->ranges[0].range.start;
 		u64 pgmap_phys = (u64)dev_dax->pgmap[0].range.start;
+		u64 vmemmap_shift = (u64)dev_dax->pgmap[0].vmemmap_shift;
 
 		WARN_ON(pgmap_phys > phys);
 		data_offset = phys - pgmap_phys;
 		pr_err("%s: offset detected phys=%llx pgmap_phys=%llx offset=%llx shift=%llx\n",
-		       __func__, phys, pgmap_phys, data_offset, );
+		       __func__, phys, pgmap_phys, data_offset, vmemmap_shift);
 	}
 	dev_dax->virt_addr = (u64)addr + data_offset;
 
