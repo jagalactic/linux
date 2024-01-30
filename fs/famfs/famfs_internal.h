@@ -13,6 +13,8 @@
 
 #include <linux/rwsem.h>
 
+extern const struct file_operations famfs_file_operations;
+
 struct famfs_mount_opts {
 	umode_t mode;
 };
