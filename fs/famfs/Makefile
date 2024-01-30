@@ -2,4 +2,4 @@
 
 obj-$(CONFIG_FAMFSV1) += famfsv1.o
 
-famfsv1-y := famfs_inode.o
+famfsv1-y := famfs_inode.o famfs_file.o
