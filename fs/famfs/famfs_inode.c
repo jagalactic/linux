@@ -432,5 +432,35 @@ int famfs_init_fs_context(struct fs_context *fc)
 	return 0;
 }
 
+static void famfs_kill_sb(struct super_block *sb)
+{
+	struct famfs_fs_info *fsi = sb->s_fs_info;
+
+	mutex_lock(&famfs_context_mutex);
+	list_del(&fsi->fsi_list);
+	mutex_unlock(&famfs_context_mutex);
+
+	mutex_destroy(&fsi->fsi_mutex);
+	if (fsi->bdev_handle)
+		bdev_release(fsi->bdev_handle);
+	if (fsi->dax_devp)
+		fs_put_dax(fsi->dax_devp, fsi);
+	if (fsi->dax_filp) /* This only happens if it's char dax */
+		filp_close(fsi->dax_filp, NULL);
+
+	if (fsi && fsi->rootdev)
+		kfree(fsi->rootdev);
+	kfree(fsi);
+	kill_litter_super(sb);
+}
+
+#define MODULE_NAME "famfs"
+static struct file_system_type famfs_fs_type = {
+	.name		  = MODULE_NAME,
+	.init_fs_context  = famfs_init_fs_context,
+	.parameters	  = famfs_fs_parameters,
+	.kill_sb	  = famfs_kill_sb,
+	.fs_flags	  = FS_USERNS_MOUNT,
+};
 
 MODULE_LICENSE("GPL");
