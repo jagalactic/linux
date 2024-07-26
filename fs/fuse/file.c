@@ -230,6 +230,63 @@ static void fuse_truncate_update_attr(struct inode *inode, struct file *file)
 	fuse_invalidate_attr_mask(inode, FUSE_STATX_MODSIZE);
 }
 
+#if IS_ENABLED(CONFIG_FUSE_FAMFS_DAX)
+
+#define FMAP_BUFSIZE 4096
+
+static int
+fuse_get_fmap(struct fuse_mount *fm, struct inode *inode, u64 nodeid)
+{
+	struct fuse_get_fmap_in inarg = { 0 };
+	size_t fmap_bufsize = FMAP_BUFSIZE;
+	size_t fmap_size;
+	void *fmap_buf;
+	int err;
+	FUSE_ARGS(args);
+
+	pr_notice("%s: nodeid=%llx, i_ino=%llx\n", __func__,
+		  nodeid, (u64)inode->i_ino);
+	fmap_buf = kcalloc(1, FMAP_BUFSIZE, GFP_KERNEL);
+	if (!fmap_buf)
+		return -EIO;
+
+	inarg.size = FMAP_BUFSIZE;
+
+	args.opcode = FUSE_GET_FMAP;
+	args.nodeid = nodeid;
+
+	args.in_numargs = 1;
+	args.in_args[0].size = sizeof(inarg);
+	args.in_args[0].value = &inarg;
+
+	/* Variable-sized output buffer
+	 * this causes fuse_simple_request() to return the size of the
+	 * output payload
+	 */
+	args.out_argvar = true;
+	args.out_numargs = 1;
+	args.out_args[0].size = fmap_bufsize;
+	args.out_args[0].value = fmap_buf;
+       
+	/* Send GET_FMAP command */
+	err = fuse_simple_request(fm, &args);
+	if (err < 0) {
+		pr_err("%s: err=%d from fuse_simple_request()\n",
+		       __func__, err);
+		return err;
+	}
+	fmap_size = err;
+	pr_notice("%s: fmap is %d bytes\n", __func__, err);
+	pr_notice("%s: nodeid=%llx alloc_size=%ld fmap_size=%ld\n",
+		  __func__, nodeid, fmap_bufsize, fmap_size);
+
+	/* Will call famfs_file_init_dax() when that gets added */
+
+	kfree(fmap_buf);
+	return 0;
+}
+#endif
+
 static int fuse_open(struct inode *inode, struct file *file)
 {
 	struct fuse_mount *fm = get_fuse_mount(inode);
@@ -241,6 +298,7 @@ static int fuse_open(struct inode *inode, struct file *file)
 	bool is_wb_truncate = is_truncate && fc->writeback_cache;
 	bool dax_truncate = is_truncate && FUSE_IS_VIRTIO_DAX(fi);
 
+	/* XXX: Does famfs need to deal with truncate? */
 	if (fuse_is_bad(inode))
 		return -EIO;
 
@@ -263,6 +321,13 @@ static int fuse_open(struct inode *inode, struct file *file)
 
 	err = fuse_do_open(fm, get_node_id(inode), file, false);
 	if (!err) {
+#if IS_ENABLED(CONFIG_FUSE_FAMFS_DAX)
+		if (fm->fc->famfs_iomap)
+			if (S_ISREG(inode->i_mode))
+				/* Get the famfs fmap */
+				fuse_get_fmap(fm, inode, get_node_id(inode));
+
+#endif
 		ff = file->private_data;
 		err = fuse_finish_open(inode, file);
 		if (err)
