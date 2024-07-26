@@ -583,6 +583,26 @@ errout:
 
 static int famfs_file_bad(struct inode *inode);
 
+static int famfs_dax_err(struct famfs_daxdev *dd)
+{
+	if (!dd->valid) {
+		pr_err("%s: daxdev=%s invalid\n",
+		       __func__, dd->name);
+		return -EIO;
+	}
+	if (dd->dax_err) {
+		pr_err("%s: daxdev=%s dax_err\n",
+		       __func__, dd->name);
+		return -EIO;
+	}
+	if (dd->error) {
+		pr_err("%s: daxdev=%s memory error\n",
+		       __func__, dd->name);
+		return -EHWPOISON;
+	}
+	return 0;
+}
+
 /**
  * famfs_fileofs_to_daxofs() - Resolve (file, offset, len) to (daxdev, offset, len)
  *
@@ -655,6 +675,7 @@ famfs_fileofs_to_daxofs(struct inode *inode, struct iomap *iomap,
 		u64 daxdev_idx           = meta->se[i].dev_index;
 		loff_t ext_len_remainder = dax_ext_len - local_offset;
 		struct famfs_daxdev *dd;
+		int rc;
 
 		if (daxdev_idx >= fc->dax_devlist->nslots) {
 			pr_err("%s: daxdev_idx %llu >= nslots %d\n",
@@ -663,6 +684,13 @@ famfs_fileofs_to_daxofs(struct inode *inode, struct iomap *iomap,
 		}
 
 		dd = &fc->dax_devlist->devlist[daxdev_idx];
+
+		rc = famfs_dax_err(dd);
+		if (rc) {
+			/* Shut down access to this file */
+			meta->error = true;
+			return rc;
+		}
 
 		iomap->addr    = dax_ext_offset + local_offset;
 		iomap->offset  = file_offset;
