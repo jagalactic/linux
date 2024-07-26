@@ -161,6 +161,8 @@ famfs_fuse_get_daxdev(struct fuse_mount *fm, const u64 index)
 	down_write(&fc->famfs_devlist_sem);
 
 	daxdev = &fc->dax_devlist->devlist[index];
+	pr_debug("%s: dax_devlist %llx daxdev[%lld]=%llx\n", __func__,
+		 (u64)fc->dax_devlist, index, (u64)daxdev);
 
 	/* Abort if daxdev is now valid */
 	if (daxdev->valid) {
@@ -171,6 +173,7 @@ famfs_fuse_get_daxdev(struct fuse_mount *fm, const u64 index)
 	}
 
 	/* Verify that the dev is valid and can be opened and gets the devno */
+	pr_debug("%s: famfs_verify_daxdev(%s)\n", __func__, daxdev_out.name);
 	err = famfs_verify_daxdev(daxdev_out.name, &daxdev->devno);
 	if (err) {
 		up_write(&fc->famfs_devlist_sem);
@@ -179,6 +182,7 @@ famfs_fuse_get_daxdev(struct fuse_mount *fm, const u64 index)
 	}
 
 	/* This will fail if it's not a dax device */
+	pr_debug("%s: dax_dev_get(%x)\n", __func__, daxdev->devno);
 	daxdev->devp = dax_dev_get(daxdev->devno);
 	if (!daxdev->devp) {
 		up_write(&fc->famfs_devlist_sem);
@@ -202,6 +206,9 @@ famfs_fuse_get_daxdev(struct fuse_mount *fm, const u64 index)
 	daxdev->valid = 1;
 
 	up_write(&fc->famfs_devlist_sem);
+
+	pr_debug("%s: daxdev(%lld, %s)=%llx opened and marked valid\n",
+		 __func__, index, daxdev->name, (u64)daxdev);
 
 out:
 	return err;
@@ -230,6 +237,8 @@ famfs_update_daxdev_table(
 	int err;
 	int i;
 
+	pr_debug("%s: dev_bitmap=0x%llx\n", __func__, meta->dev_bitmap);
+
 	/* First time through we will need to allocate the dax_devlist */
 	if (unlikely(!fc->dax_devlist)) {
 		local_devlist = kcalloc(1, sizeof(*fc->dax_devlist), GFP_KERNEL);
@@ -237,6 +246,8 @@ famfs_update_daxdev_table(
 			return -ENOMEM;
 
 		local_devlist->nslots = MAX_DAXDEVS;
+		pr_debug("%s: allocate dax_devlist=%llx\n", __func__,
+			 (u64)local_devlist);
 
 		local_devlist->devlist = kcalloc(MAX_DAXDEVS,
 						 sizeof(struct famfs_daxdev),
@@ -248,8 +259,13 @@ famfs_update_daxdev_table(
 
 		/* We don't need famfs_devlist_sem here because we use cmpxchg */
 		if (cmpxchg(&fc->dax_devlist, NULL, local_devlist) != NULL) {
+			pr_debug("%s: aborting new devlist\n", __func__);
 			kfree(local_devlist->devlist);
 			kfree(local_devlist); /* another thread beat us to it */
+		} else {
+			pr_debug("%s: published new dax_devlist %llx / %llx\n",
+				 __func__, (u64)local_devlist,
+				 (u64)local_devlist->devlist);
 		}
 	}
 
