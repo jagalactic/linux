@@ -117,6 +117,9 @@ static struct inode *fuse_alloc_inode(struct super_block *sb)
 	if (IS_ENABLED(CONFIG_FUSE_PASSTHROUGH))
 		fuse_inode_backing_set(fi, NULL);
 
+	if (IS_ENABLED(CONFIG_FUSE_FAMFS_DAX))
+		famfs_meta_set(fi, NULL);
+
 	return &fi->inode;
 
 out_free_forget:
@@ -137,6 +140,9 @@ static void fuse_free_inode(struct inode *inode)
 #endif
 	if (IS_ENABLED(CONFIG_FUSE_PASSTHROUGH))
 		fuse_backing_put(fuse_inode_backing(fi));
+
+	if (S_ISREG(inode->i_mode) && fuse_file_famfs(fi))
+		famfs_meta_free(fi);
 
 	kmem_cache_free(fuse_inode_cachep, fi);
 }
@@ -1036,9 +1042,7 @@ void fuse_conn_put(struct fuse_conn *fc)
 		}
 		if (IS_ENABLED(CONFIG_FUSE_PASSTHROUGH))
 			fuse_backing_files_free(fc);
-#if IS_ENABLED(CONFIG_FUSE_FAMFS_DAX)
-		kfree(fc->shadow);
-#endif
+		famfs_teardown(fc);
 		call_rcu(&fc->rcu, delayed_release);
 	}
 }
