@@ -669,6 +669,9 @@ enum fuse_opcode {
 	FUSE_STATX		= 52,
 	FUSE_COPY_FILE_RANGE_64	= 53,
 
+	/* Famfs / devdax opcodes */
+	FUSE_GET_FMAP           = 54,
+
 	/* CUSE specific operations */
 	CUSE_INIT		= 4096,
 
@@ -1311,6 +1314,22 @@ struct fuse_uring_cmd_req {
 	/* queue the command is for (queue index) */
 	uint16_t qid;
 	uint8_t padding[6];
+};
+
+/*
+ * GET_FMAP reply header. The extent records that follow it
+ * (fuse_famfs_simple_ext / fuse_famfs_iext) are defined in the following
+ * commit, which parses them.
+ */
+struct fuse_famfs_fmap_header {
+	uint8_t file_type; /* enum fuse_famfs_file_type */
+	uint8_t reserved;
+	uint16_t fmap_version;
+	uint32_t ext_type; /* enum famfs_ext_type */
+	uint32_t nextents;
+	uint32_t fmap_size; /* Inclusive of this header */
+	uint64_t file_size;
+	uint64_t reserved1;
 };
 
 #endif /* _LINUX_FUSE_H */
