@@ -1565,10 +1565,12 @@ int famfs_file_init_dax(struct fuse_mount *fm,
 			     struct inode *inode, void *fmap_buf,
 			     size_t fmap_size);
 void __famfs_meta_free(void *map);
-#endif
+void famfs_teardown(struct fuse_conn *fc);
+#else
 static inline void famfs_teardown(struct fuse_conn *fc)
 {
 }
+#endif
 
 static inline void famfs_meta_init(struct fuse_inode *fi)
 {

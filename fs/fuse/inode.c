@@ -1049,7 +1049,7 @@ void fuse_conn_put(struct fuse_conn *fc)
 		}
 		if (IS_ENABLED(CONFIG_FUSE_PASSTHROUGH))
 			fuse_backing_files_free(fc);
-		if (IS_ENABLED(CONFIG_FUSE_FAMFS_DAX))
+ 		if (IS_ENABLED(CONFIG_FUSE_FAMFS_DAX))
 			famfs_teardown(fc);
 		call_rcu(&fc->rcu, delayed_release);
 	}
