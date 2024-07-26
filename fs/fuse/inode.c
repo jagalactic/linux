@@ -1431,8 +1431,10 @@ static void process_init_reply(struct fuse_mount *fm, struct fuse_args *args,
 				u64 in_flags = ((u64)ia->in.flags2 << 32)
 						| ia->in.flags;
 
-				if (in_flags & FUSE_DAX_FMAP)
+				if (in_flags & FUSE_DAX_FMAP) {
 					fc->famfs_iomap = 1;
+					famfs_init_devlist_sem(fc);
+				}
 			}
 		} else {
 			ra_pages = fc->max_read / PAGE_SIZE;
