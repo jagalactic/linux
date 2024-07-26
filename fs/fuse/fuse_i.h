@@ -1347,6 +1347,9 @@ extern void fuse_sysctl_unregister(void);
 /* famfs.c */
 
 #if IS_ENABLED(CONFIG_FUSE_FAMFS_DAX)
+int famfs_file_init_dax(struct fuse_mount *fm,
+			struct inode *inode, void *fmap_buf,
+			size_t fmap_size);
 void __famfs_meta_free(void *map);
 
 /* Set fi->famfs_meta = NULL regardless of prior value */
@@ -1364,7 +1367,10 @@ static inline struct fuse_backing *famfs_meta_set(struct fuse_inode *fi,
 
 static inline void famfs_meta_free(struct fuse_inode *fi)
 {
-	famfs_meta_set(fi, NULL);
+	if (fi->famfs_meta != NULL) {
+		__famfs_meta_free(fi->famfs_meta);
+		WRITE_ONCE(fi->famfs_meta, NULL);
+	}
 }
 
 static inline int fuse_file_famfs(struct fuse_inode *fi)
