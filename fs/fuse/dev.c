@@ -2663,6 +2663,34 @@ static long fuse_dev_ioctl_backing_close(struct file *file, __u32 __user *argp)
 	return fuse_backing_close(fud->fc, backing_id);
 }
 
+static long fuse_dev_ioctl_daxdev_open(struct file *file,
+				       struct fuse_backing_map __user *argp)
+{
+	struct fuse_dev *fud = fuse_get_dev(file);
+	struct fuse_backing_map map;
+
+	if (IS_ERR(fud))
+		return PTR_ERR(fud);
+
+	/* Only fs-dax (famfs) mode accepts daxdev registration */
+	if (!fud->fc->famfs_iomap)
+		return -EOPNOTSUPP;
+
+	/*
+	 * famfs_iomap only attests that the session founder held CAP_SYS_RAWIO
+	 * at FUSE_INIT; re-check the task actually performing the registration,
+	 * since the fuse device fd may have been passed to a less-privileged
+	 * process.
+	 */
+	if (!capable(CAP_SYS_RAWIO))
+		return -EPERM;
+
+	if (copy_from_user(&map, argp, sizeof(map)))
+		return -EFAULT;
+
+	return famfs_daxdev_open(fud->fc, &map);
+}
+
 static long fuse_dev_ioctl_sync_init(struct file *file)
 {
 	int err = -EINVAL;
@@ -2694,6 +2722,9 @@ static long fuse_dev_ioctl(struct file *file, unsigned int cmd,
 
 	case FUSE_DEV_IOC_SYNC_INIT:
 		return fuse_dev_ioctl_sync_init(file);
+
+	case FUSE_DEV_IOC_DAXDEV_OPEN:
+		return fuse_dev_ioctl_daxdev_open(file, argp);
 
 	default:
 		return -ENOTTY;

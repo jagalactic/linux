@@ -1005,6 +1005,11 @@ struct fuse_conn {
 		/* Request timeout (in jiffies). 0 = no timeout */
 		unsigned int req_timeout;
 	} timeout;
+
+#if IS_ENABLED(CONFIG_FUSE_FAMFS_DAX)
+	struct rw_semaphore famfs_devlist_sem;
+	struct famfs_dax_devlist *dax_devlist;
+#endif
 };
 
 /*
@@ -1646,6 +1651,8 @@ int famfs_file_init_dax(struct fuse_mount *fm,
 			size_t fmap_size);
 void __famfs_meta_free(void *map);
 
+void famfs_teardown(struct fuse_conn *fc);
+
 /* Set fi->famfs_meta = NULL regardless of prior value */
 static inline void famfs_meta_init(struct fuse_inode *fi)
 {
@@ -1667,6 +1674,11 @@ static inline void famfs_meta_free(struct fuse_inode *fi)
 	}
 }
 
+static inline void famfs_init_devlist_sem(struct fuse_conn *fc)
+{
+	init_rwsem(&fc->famfs_devlist_sem);
+}
+
 static inline int fuse_file_famfs(struct fuse_inode *fi)
 {
 	return (READ_ONCE(fi->famfs_meta) != NULL);
@@ -1674,7 +1686,13 @@ static inline int fuse_file_famfs(struct fuse_inode *fi)
 
 int fuse_get_fmap(struct fuse_mount *fm, struct inode *inode);
 
+int famfs_daxdev_open(struct fuse_conn *fc, struct fuse_backing_map *map);
+
 #else /* !CONFIG_FUSE_FAMFS_DAX */
+
+static inline void famfs_teardown(struct fuse_conn *fc)
+{
+}
 
 static inline struct fuse_backing *famfs_meta_set(struct fuse_inode *fi,
 						  void *meta)
@@ -1683,6 +1701,10 @@ static inline struct fuse_backing *famfs_meta_set(struct fuse_inode *fi,
 }
 
 static inline void famfs_meta_free(struct fuse_inode *fi)
+{
+}
+
+static inline void famfs_init_devlist_sem(struct fuse_conn *fc)
 {
 }
 
@@ -1695,6 +1717,12 @@ static inline int
 fuse_get_fmap(struct fuse_mount *fm, struct inode *inode)
 {
 	return 0;
+}
+
+static inline int
+famfs_daxdev_open(struct fuse_conn *fc, struct fuse_backing_map *map)
+{
+	return -EOPNOTSUPP;
 }
 
 #endif /* CONFIG_FUSE_FAMFS_DAX */
