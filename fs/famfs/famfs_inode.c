@@ -423,7 +423,7 @@ static struct file_system_type famfs_fs_type = {
 	.init_fs_context  = famfs_init_fs_context,
 	.parameters	  = famfs_fs_parameters,
 	.kill_sb	  = famfs_kill_sb,
-	.fs_flags	  = FS_USERNS_MOUNT,
+	.fs_flags	  = FS_REQUIRES_DEV
 };
 
 /******************************************************************************
