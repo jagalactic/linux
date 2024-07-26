@@ -280,7 +280,8 @@ fuse_get_fmap(struct fuse_mount *fm, struct inode *inode, u64 nodeid)
 	pr_notice("%s: nodeid=%llx alloc_size=%ld fmap_size=%ld\n",
 		  __func__, nodeid, fmap_bufsize, fmap_size);
 
-	/* Will call famfs_file_init_dax() when that gets added */
+	/* Convert fmap into in-memory format and hang from inode */
+	famfs_file_init_dax(fm, inode, fmap_buf, fmap_size);
 
 	kfree(fmap_buf);
 	return 0;
