@@ -11,6 +11,7 @@
 
 #include <linux/cleanup.h>
 #include <linux/fs.h>
+#include <linux/file.h>
 #include <linux/mm.h>
 #include <linux/dax.h>
 #include <linux/iomap.h>
@@ -22,6 +23,331 @@
 #include "famfs_kfmap.h"
 #include "fuse_i.h"
 
+static void famfs_set_daxdev_err(
+	struct fuse_conn *fc, struct dax_device *dax_devp);
+
+static int
+famfs_dax_notify_failure(struct dax_device *dax_devp, u64 offset,
+			u64 len, int mf_flags)
+{
+	struct fuse_conn *fc = dax_holder(dax_devp);
+
+	famfs_set_daxdev_err(fc, dax_devp);
+
+	return 0;
+}
+
+static const struct dax_holder_operations famfs_fuse_dax_holder_ops = {
+	.notify_failure		= famfs_dax_notify_failure,
+};
+
+/*****************************************************************************/
+
+/*
+ * famfs_teardown()
+ *
+ * Deallocate famfs metadata for a fuse_conn
+ */
+void
+famfs_teardown(struct fuse_conn *fc)
+{
+	struct famfs_dax_devlist *devlist __free(kfree) = NULL;
+	int i;
+
+	/*
+	 * Detach the table under the same lock famfs_set_daxdev_err() takes, so
+	 * a notify_failure racing teardown either runs first against the live
+	 * table or observes dax_devlist == NULL and bails, rather than
+	 * dereferencing it after we clear it. The daxdev holders are dropped
+	 * below, after which no further notify_failure can arrive.
+	 */
+	scoped_guard(rwsem_write, &fc->famfs_devlist_sem) {
+		devlist = fc->dax_devlist;
+		fc->dax_devlist = NULL;
+	}
+
+	if (!devlist)
+		return;
+
+	if (!devlist->devlist)
+		return;
+
+	/* Close & release all the daxdevs in our table */
+	for (i = 0; i < devlist->nslots; i++) {
+		struct famfs_daxdev *dd = &devlist->devlist[i];
+
+		if (!dd->valid)
+			continue;
+
+		/* Only call fs_put_dax if fs_dax_get succeeded */
+		if (dd->devp) {
+			if (!dd->dax_err)
+				fs_put_dax(dd->devp, fc);
+			put_dax(dd->devp);
+		}
+
+		kfree(dd->name);
+	}
+	kfree(devlist->devlist);
+}
+
+/* Allocate the daxdev table on first use (idempotent via cmpxchg) */
+static int famfs_devlist_alloc(struct fuse_conn *fc)
+{
+	struct famfs_dax_devlist *devlist;
+
+	if (fc->dax_devlist)
+		return 0;
+
+	devlist = kcalloc(1, sizeof(*devlist), GFP_KERNEL);
+	if (!devlist)
+		return -ENOMEM;
+
+	devlist->nslots = MAX_DAXDEVS;
+	devlist->devlist = kcalloc(MAX_DAXDEVS, sizeof(struct famfs_daxdev),
+				   GFP_KERNEL);
+	if (!devlist->devlist) {
+		kfree(devlist);
+		return -ENOMEM;
+	}
+
+	/* If another thread allocated it first, drop ours */
+	if (cmpxchg(&fc->dax_devlist, NULL, devlist) != NULL) {
+		kfree(devlist->devlist);
+		kfree(devlist);
+	}
+
+	return 0;
+}
+
+/*
+ * famfs_install_daxdev() - exclusively acquire a resolved daxdev and publish
+ * it in the table at @index. Shared by the GET_DAXDEV (pull) and
+ * DAXDEV_OPEN (push) registration paths.
+ *
+ * Serializes with concurrent installers under famfs_devlist_sem and rechecks
+ * ->valid. A daxdev is entered in the table only once it has been exclusively
+ * acquired via fs_dax_get(); on failure the dax_dev_get() reference is
+ * released and the slot is left invalid, so the referencing fmap is rejected
+ * rather than mapped without an exclusive holder. @name may be NULL (the push
+ * path passes no pathname).
+ */
+static int famfs_install_daxdev(struct fuse_conn *fc, u64 index, dev_t devno,
+				const char *name)
+{
+	struct famfs_daxdev *daxdev;
+	int rc = 0;
+
+	if (index >= fc->dax_devlist->nslots) {
+		pr_err("%s: index(%llu) >= nslots(%d)\n",
+		       __func__, index, fc->dax_devlist->nslots);
+		return -EINVAL;
+	}
+
+	scoped_guard(rwsem_write, &fc->famfs_devlist_sem) {
+		daxdev = &fc->dax_devlist->devlist[index];
+
+		/* Installed already by a concurrent push/pull */
+		if (daxdev->valid)
+			return 0;
+
+		/*
+		 * A prior attempt already determined this daxdev cannot be
+		 * exclusively acquired (see the fs_dax_get() failure handling
+		 * below). Don't thrash on GET_DAXDEV/fs_dax_get(); fail fast.
+		 */
+		if (daxdev->dax_err)
+			return -EIO;
+
+		/*
+		 * Temporary: dax_dev_get() is the exported upstream lookup, but
+		 * unlike dax_dev_find() it allocates for any dev_t and does not
+		 * reject non-dax devices. Restore dax_dev_find() (and that
+		 * rejection) once it is upstream.
+		 */
+		daxdev->devp = dax_dev_get(devno);
+		if (!daxdev->devp) {
+			pr_warn("%s: device %u:%u not found or not dax\n",
+				__func__, MAJOR(devno), MINOR(devno));
+			return -ENODEV;
+		}
+
+		rc = fs_dax_get(daxdev->devp, fc, &famfs_fuse_dax_holder_ops);
+		if (rc) {
+			/*
+			 * Distinguish a lost race from a real failure. -EBUSY
+			 * with the daxdev already held by *this* fuse_conn
+			 * means a concurrent acquire won and will publish the
+			 * slot valid: not an error, and must not be cached as
+			 * dax_err. Any other failure (foreign holder, not a dax
+			 * device, wrong driver type) is permanent for this
+			 * connection, so record dax_err to stop re-fetching and
+			 * re-acquiring it.
+			 */
+			if (!(rc == -EBUSY && dax_holder(daxdev->devp) == fc)) {
+				pr_err("%s: fs_dax_get(%u:%u) failed rc=%d\n",
+				       __func__, MAJOR(devno), MINOR(devno), rc);
+				daxdev->dax_err = true;
+			}
+			put_dax(daxdev->devp);
+			daxdev->devp = NULL;
+			return rc;
+		}
+
+		daxdev->devno = devno;
+		if (name) {
+			daxdev->name = kstrdup(name, GFP_KERNEL);
+			if (!daxdev->name) {
+				fs_put_dax(daxdev->devp, fc);
+				put_dax(daxdev->devp);
+				daxdev->devp = NULL;
+				return -ENOMEM;
+			}
+		}
+
+		wmb(); /* All other fields must be visible before valid */
+		daxdev->valid = 1;
+	}
+
+	return 0;
+}
+
+/**
+ * famfs_daxdev_open() - Register a daxdev via FUSE_DEV_IOC_DAXDEV_OPEN
+ * @fc:   fuse_conn
+ * @map:  fuse_backing_map; @map->fd is an fd to the devdax device and
+ *        @map->daxdev_index is the (cluster-invariant) famfs index.
+ *
+ * The server pushes a daxdev to the kernel by reference (an fd), rather than
+ * the kernel pulling it by name via GET_DAXDEV. The resolved daxdev is
+ * exclusively acquired and entered in the table at @map->daxdev_index.
+ *
+ * Return: 0=success
+ *         -errno=failure
+ */
+int famfs_daxdev_open(struct fuse_conn *fc, struct fuse_backing_map *map)
+{
+	struct inode *inode;
+	struct file *file;
+	dev_t devno;
+	int rc;
+
+	/* Only fs-dax (famfs) mode accepts daxdev registration */
+	if (!fc->famfs_iomap)
+		return -EOPNOTSUPP;
+
+	file = fget(map->fd);
+	if (!file)
+		return -EBADF;
+
+	inode = file_inode(file);
+	if (!S_ISCHR(inode->i_mode)) {
+		fput(file);
+		return -EINVAL;
+	}
+	devno = inode->i_rdev;
+	fput(file);
+
+	rc = famfs_devlist_alloc(fc);
+	if (rc)
+		return rc;
+
+	rc = famfs_install_daxdev(fc, map->daxdev_index, devno, NULL);
+	if (rc)
+		pr_err("%s: failed to install daxdev\n", __func__);
+
+	return rc;
+}
+
+/**
+ * famfs_check_daxdev_table() - Verify an fmap's referenced daxdevs are installed
+ * @fm:   fuse_mount
+ * @meta: famfs_file_meta, in-memory format, built from a GET_FMAP response
+ *
+ * Called for each new file fmap. Every daxdev the fmap references must already
+ * be installed in the table, having been pushed in via FUSE_DEV_IOC_DAXDEV_OPEN
+ * before any file that uses it is accessed. If any referenced daxdev is not
+ * present, the fmap is rejected so the file is never mapped against a daxdev
+ * that has no exclusive holder.
+ *
+ * Return: 0=success (all referenced daxdevs present)
+ *         <0=a referenced daxdev is missing from the table
+ */
+static int
+famfs_check_daxdev_table(
+	struct fuse_mount *fm,
+	const struct famfs_file_meta *meta)
+{
+	struct fuse_conn *fc = fm->fc;
+	int nmissing = 0;
+	int err;
+
+	err = famfs_devlist_alloc(fc);
+	if (err)
+		return err;
+
+	/* Count missing daxdevs while holding the reader lock */
+	scoped_guard(rwsem_read, &fc->famfs_devlist_sem) {
+		unsigned long i;
+
+		for_each_set_bit(i, (unsigned long *)&meta->dev_bitmap,
+				 MAX_DAXDEVS) {
+			struct famfs_daxdev *dd = &fc->dax_devlist->devlist[i];
+
+			/*
+			 * Skip daxdevs already installed (valid) or already
+			 * known to be unusable (dax_err). Re-fetching either
+			 * just thrashes on GET_DAXDEV and fs_dax_get().
+			 */
+			if (!dd->valid && !dd->dax_err)
+				nmissing++;
+		}
+	}
+
+	if (nmissing > 0) {
+		/* this file referenced at least one daxdev that is not in
+		 * the table. Daxdevs must be known before any file that
+		 * uses them is accessed
+		 */
+		pr_err("%s: %d missing daxdev(s)\n", __func__, nmissing);
+		return -ENODEV;
+	}
+
+	return 0;
+}
+
+static void
+famfs_set_daxdev_err(
+	struct fuse_conn *fc,
+	struct dax_device *dax_devp)
+{
+	int i;
+
+	/*
+	 * Search the list by dax_devp under the write lock: we set dd->error,
+	 * and it serializes against famfs_teardown() clearing the table.
+	 */
+	scoped_guard(rwsem_write, &fc->famfs_devlist_sem) {
+		if (!fc->dax_devlist)
+			return;
+		for (i = 0; i < fc->dax_devlist->nslots; i++) {
+			if (fc->dax_devlist->devlist[i].valid) {
+				struct famfs_daxdev *dd;
+
+				dd = &fc->dax_devlist->devlist[i];
+				if (dd->devp != dax_devp)
+					continue;
+
+				dd->error = true;
+
+				pr_err("%s: memory error on daxdev %s (%d)\n",
+				       __func__, dd->name, i);
+				return;
+			}
+		}
+	}
+	pr_err("%s: memory err on unrecognized daxdev\n", __func__);
+}
 
 /***************************************************************************/
 
@@ -227,6 +553,10 @@ famfs_file_init_dax(
 	rc = famfs_fuse_meta_alloc(fmap_buf, fmap_size, &meta);
 	if (rc)
 		goto errout;
+
+	/* Make sure this fmap doesn't reference any unknown daxdevs */
+	if (famfs_check_daxdev_table(fm, meta))
+		meta->error = true;
 
 	/* Publish the famfs metadata on fi->famfs_meta */
 	inode_lock(inode);
