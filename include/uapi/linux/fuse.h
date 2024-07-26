@@ -1143,7 +1143,10 @@ struct fuse_notify_prune_out {
 struct fuse_backing_map {
 	int32_t		fd;
 	uint32_t	flags;
-	uint64_t	padding;
+	union {
+		uint64_t	padding;
+		uint64_t	daxdev_index;	/* FUSE_DEV_IOC_DAXDEV_OPEN */
+	};
 };
 
 /* Device ioctls: */
@@ -1153,6 +1156,8 @@ struct fuse_backing_map {
 					     struct fuse_backing_map)
 #define FUSE_DEV_IOC_BACKING_CLOSE	_IOW(FUSE_DEV_IOC_MAGIC, 2, uint32_t)
 #define FUSE_DEV_IOC_SYNC_INIT		_IO(FUSE_DEV_IOC_MAGIC, 3)
+#define FUSE_DEV_IOC_DAXDEV_OPEN	_IOW(FUSE_DEV_IOC_MAGIC, 4, \
+					     struct fuse_backing_map)
 
 struct fuse_lseek_in {
 	uint64_t	fh;
