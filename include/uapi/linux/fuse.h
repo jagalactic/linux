@@ -669,6 +669,9 @@ enum fuse_opcode {
 	FUSE_STATX		= 52,
 	FUSE_COPY_FILE_RANGE_64	= 53,
 
+	/* Famfs / devdax opcodes */
+	FUSE_GET_FMAP           = 54,
+
 	/* CUSE specific operations */
 	CUSE_INIT		= 4096,
 

@@ -10714,6 +10714,13 @@ F:	fs/fuse/backing.c
 F:	fs/fuse/iomode.c
 F:	fs/fuse/passthrough.c
 
+FUSE FILESYSTEM [FAMFS Fabric-Attached Memory File System]
+M:	John Groves <John@Groves.net>
+L:	linux-cxl@vger.kernel.org
+L:	linux-fsdevel@vger.kernel.org
+S:	Supported
+F:	fs/fuse/famfs.c
+
 FUTEX SUBSYSTEM
 M:	Thomas Gleixner <tglx@kernel.org>
 M:	Ingo Molnar <mingo@redhat.com>
