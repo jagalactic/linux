@@ -118,7 +118,7 @@ static struct inode *fuse_alloc_inode(struct super_block *sb)
 		fuse_inode_backing_set(fi, NULL);
 
 	if (IS_ENABLED(CONFIG_FUSE_FAMFS_DAX))
-		famfs_meta_set(fi, NULL);
+		famfs_meta_init(fi);
 
 	return &fi->inode;
 
@@ -1420,15 +1420,19 @@ static void process_init_reply(struct fuse_mount *fm, struct fuse_args *args,
 				fc->io_uring = 1;
 			if (IS_ENABLED(CONFIG_FUSE_FAMFS_DAX) &&
 			    flags & FUSE_DAX_FMAP) {
-				/* XXX: Should also check that fuse server
-				 * has CAP_SYS_RAWIO and/or CAP_SYS_ADMIN,
-				 * since it is directing the kernel to access
-				 * dax memory directly - but this function
-				 * appears not to be called in fuse server
-				 * process context (b/c even if it drops
-				 * those capabilities, they are held here).
+				/* famfs_iomap is only allowed if the fuse
+				 * server has CAP_SYS_RAWIO. This was checked
+				 * in fuse_send_init, and FUSE_DAX_IOMAP was
+				 * set in in_flags if so. Only allow enablement
+				 * if we find it there. This function is normally
+				 * not running in fuse server context, so we can
+				 * do the capability check here...
 				 */
-				fc->famfs_iomap = 1;
+				u64 in_flags = ((u64)ia->in.flags2 << 32)
+						| ia->in.flags;
+
+				if (in_flags & FUSE_DAX_FMAP)
+					fc->famfs_iomap = 1;
 			}
 		} else {
 			ra_pages = fc->max_read / PAGE_SIZE;
@@ -1488,7 +1492,7 @@ void fuse_send_init(struct fuse_mount *fm)
 		flags |= FUSE_SUBMOUNTS;
 	if (IS_ENABLED(CONFIG_FUSE_PASSTHROUGH))
 		flags |= FUSE_PASSTHROUGH;
-	if (IS_ENABLED(CONFIG_FUSE_FAMFS_DAX))
+	if (IS_ENABLED(CONFIG_FUSE_FAMFS_DAX) && capable(CAP_SYS_RAWIO))
 		flags |= FUSE_DAX_FMAP;
 
 	/*
