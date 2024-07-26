@@ -14,12 +14,243 @@
 #include <linux/mm.h>
 #include <linux/dax.h>
 #include <linux/iomap.h>
+#include <linux/log2.h>
 #include <linux/path.h>
 #include <linux/namei.h>
 #include <linux/string.h>
 
+#include "famfs_kfmap.h"
 #include "fuse_i.h"
 
+
+/***************************************************************************/
+
+void __famfs_meta_free(void *famfs_meta)
+{
+	struct famfs_file_meta *fmap = famfs_meta;
+
+	if (!fmap)
+		return;
+
+	kfree(fmap->se);
+	kfree(fmap);
+}
+DEFINE_FREE(__famfs_meta_free, void *, if (_T) __famfs_meta_free(_T))
+
+static int
+famfs_check_ext_alignment(struct famfs_meta_simple_ext *se)
+{
+	int errs = 0;
+
+	if (se->dev_index != 0)
+		errs++;
+
+	/* TODO: pass in alignment so we can support the other page sizes */
+	if (!IS_ALIGNED(se->ext_offset, PMD_SIZE))
+		errs++;
+
+	if (!IS_ALIGNED(se->ext_len, PMD_SIZE))
+		errs++;
+
+	return errs;
+}
+
+/**
+ * famfs_fuse_meta_alloc() - Allocate famfs file metadata
+ * @fmap_buf:  fmap buffer from fuse server
+ * @fmap_buf_size: size of fmap buffer
+ * @metap:         pointer where 'struct famfs_file_meta' is returned
+ *
+ * Returns: 0=success
+ *          -errno=failure
+ */
+static int
+famfs_fuse_meta_alloc(
+	void *fmap_buf,
+	size_t fmap_buf_size,
+	struct famfs_file_meta **metap)
+{
+	struct fuse_famfs_fmap_header *fmh;
+	size_t extent_total = 0;
+	size_t next_offset = 0;
+	int errs = 0;
+	int i;
+
+	fmh = fmap_buf;
+
+	/* Move past fmh in fmap_buf */
+	next_offset += sizeof(*fmh);
+	if (next_offset > fmap_buf_size) {
+		pr_err("%s:%d: fmap_buf underflow offset/size %ld/%ld\n",
+		       __func__, __LINE__, next_offset, fmap_buf_size);
+		return -EINVAL;
+	}
+
+	if (fmh->nextents < 1) {
+		pr_err("%s: nextents %d < 1\n", __func__, fmh->nextents);
+		return -ERANGE;
+	}
+
+	/*
+	 * No separate upper cap on nextents: the reply buffer bounds it. The
+	 * extent list is rejected below if it does not fit in fmap_buf_size, and
+	 * fuse_get_fmap() already refused to kvmalloc a buffer larger than
+	 * FMAP_BUFSIZE_MAX -- so anything that fits is small enough to handle.
+	 */
+
+	struct famfs_file_meta *meta __free(__famfs_meta_free) = kzalloc(sizeof(*meta), GFP_KERNEL);
+
+	if (!meta)
+		return -ENOMEM;
+
+	meta->error = false;
+	meta->file_type = fmh->file_type;
+	meta->file_size = fmh->file_size;
+
+	switch (fmh->ext_type) {
+	case FUSE_FAMFS_EXT_SIMPLE: {
+		struct fuse_famfs_simple_ext *se_in;
+
+		se_in = fmap_buf + next_offset;
+
+		/* Move past simple extents */
+		next_offset += fmh->nextents * sizeof(*se_in);
+		if (next_offset > fmap_buf_size) {
+			pr_err("%s:%d: fmap_buf underflow offset/size %ld/%ld\n",
+			       __func__, __LINE__, next_offset, fmap_buf_size);
+			return -EINVAL;
+		}
+
+		meta->fm_nextents = fmh->nextents;
+
+		meta->se = kcalloc(meta->fm_nextents, sizeof(*(meta->se)),
+				   GFP_KERNEL);
+		if (!meta->se)
+			return -ENOMEM;
+
+		for (i = 0; i < fmh->nextents; i++) {
+			meta->se[i].dev_index  = se_in[i].se_devindex;
+			meta->se[i].ext_offset = se_in[i].se_offset;
+			meta->se[i].ext_len    = se_in[i].se_len;
+
+			/* Record bitmap of referenced daxdev indices */
+			meta->dev_bitmap |= BIT_ULL(meta->se[i].dev_index);
+
+			errs += famfs_check_ext_alignment(&meta->se[i]);
+
+			extent_total += meta->se[i].ext_len;
+		}
+
+		/*
+		 * Detect a uniform extent size so the resolver can index se[]
+		 * by a shift rather than walking the list. This requires every
+		 * extent but the last to be the same power-of-2 size, with the
+		 * last no larger. ext_shift stays 0 (walk) for a single extent,
+		 * or a non-uniform / non-power-of-2 list.
+		 */
+		meta->ext_shift = 0;
+		if (meta->fm_nextents > 1) {
+			u64 esz = meta->se[0].ext_len;
+			bool uniform = is_power_of_2(esz);
+
+			for (i = 1; uniform && i < meta->fm_nextents - 1; i++)
+				if (meta->se[i].ext_len != esz)
+					uniform = false;
+
+			if (uniform && meta->se[meta->fm_nextents - 1].ext_len > esz)
+				uniform = false;
+
+			if (uniform)
+				meta->ext_shift = ilog2(esz);
+		}
+		break;
+	}
+
+	default:
+		pr_err("%s: invalid ext_type %d\n", __func__, fmh->ext_type);
+		return -EINVAL;
+	}
+
+	if (errs > 0) {
+		pr_err("%s: %d alignment errors found\n", __func__, errs);
+		return -EINVAL;
+	}
+
+	/* More sanity checks */
+	if (extent_total < meta->file_size) {
+		pr_err("%s: file size %ld larger than map size %ld\n",
+		       __func__, meta->file_size, extent_total);
+		return -EINVAL;
+	}
+
+	if (cmpxchg(metap, NULL, meta) != NULL) {
+		pr_debug("%s: fmap race detected\n", __func__);
+		return 0; /* fmap already installed */
+	}
+	retain_and_null_ptr(meta);
+
+	return 0;
+}
+
+/**
+ * famfs_file_init_dax() - init famfs dax file metadata
+ *
+ * @fm:        fuse_mount
+ * @inode:     the inode
+ * @fmap_buf:  fmap response message
+ * @fmap_size: Size of the fmap message
+ *
+ * Initialize famfs metadata for a file, based on the contents of the GET_FMAP
+ * response
+ *
+ * Return: 0=success
+ *          -errno=failure
+ */
+int
+famfs_file_init_dax(
+	struct fuse_mount *fm,
+	struct inode *inode,
+	void *fmap_buf,
+	size_t fmap_size)
+{
+	struct fuse_inode *fi = get_fuse_inode(inode);
+	struct famfs_file_meta *meta = NULL;
+	int rc;
+
+	if (fi->famfs_meta) {
+		pr_notice("%s: i_no=%llu fmap_size=%zu ALREADY INITIALIZED\n",
+			  __func__,
+			  inode->i_ino, fmap_size);
+		return 0;
+	}
+
+	rc = famfs_fuse_meta_alloc(fmap_buf, fmap_size, &meta);
+	if (rc)
+		goto errout;
+
+	/* Publish the famfs metadata on fi->famfs_meta */
+	inode_lock(inode);
+
+	if (famfs_meta_set(fi, meta) == NULL) {
+		i_size_write(inode, meta->file_size);
+		inode->i_flags |= S_DAX;
+	} else {
+		pr_debug("%s: file already had metadata\n", __func__);
+		__famfs_meta_free(meta);
+		/* rc is 0 - the file is valid */
+	}
+
+	inode_unlock(inode);
+	return 0;
+
+errout:
+	if (rc)
+		__famfs_meta_free(meta);
+
+	return rc;
+}
+
+#define FMAP_BUFSIZE PAGE_SIZE
 
 #define FMAP_BUFSIZE_INIT PAGE_SIZE
 /*
@@ -123,12 +354,9 @@ int fuse_get_fmap(struct fuse_mount *fm, struct inode *inode)
 		bufsize = required;
 	}
 
-	/* We retrieved the "fmap" (the file's map to memory), but
-	 * we haven't used it yet. A call to famfs_file_init_dax() will be added
-	 * here in a subsequent patch, when we add the ability to attach
-	 * fmaps to files.
-	 */
+	/* Convert fmap into in-memory format and hang from inode */
+	rc = famfs_file_init_dax(fm, inode, fmap_buf, fmap_size);
 
 	kvfree(fmap_buf);
-	return 0;
+	return rc;
 }
