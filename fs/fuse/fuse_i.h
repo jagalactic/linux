@@ -711,6 +711,9 @@ struct fuse_conn {
 	/** @sync_init: Is synchronous FUSE_INIT allowed? */
 	unsigned int sync_init:1;
 
+	/** @famfs_iomap: dev_dax_iomap support for famfs */
+	unsigned int famfs_iomap:1;
+
 	/** @max_stack_depth: Maximum stack depth for passthrough backing files */
 	int max_stack_depth;
 
