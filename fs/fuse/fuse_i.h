@@ -1560,19 +1560,48 @@ extern void fuse_sysctl_unregister(void);
 #endif /* CONFIG_SYSCTL */
 
 /* famfs.c */
+#if IS_ENABLED(CONFIG_FUSE_FAMFS_DAX)
+int famfs_file_init_dax(struct fuse_mount *fm,
+			     struct inode *inode, void *fmap_buf,
+			     size_t fmap_size);
+void __famfs_meta_free(void *map);
+#endif
+static inline void famfs_teardown(struct fuse_conn *fc)
+{
+}
+
+static inline void famfs_meta_init(struct fuse_inode *fi)
+{
+#if IS_ENABLED(CONFIG_FUSE_FAMFS_DAX)
+	fi->famfs_meta = NULL;
+#endif
+}
+
 static inline struct fuse_backing *famfs_meta_set(struct fuse_inode *fi,
 						       void *meta)
 {
 #if IS_ENABLED(CONFIG_FUSE_FAMFS_DAX)
-	return xchg(&fi->famfs_meta, meta);
+	return cmpxchg(&fi->famfs_meta, NULL, meta);
 #else
 	return NULL;
 #endif
 }
 
+static inline void famfs_init_devlist_sem(struct fuse_conn *fc)
+{
+#if IS_ENABLED(CONFIG_FUSE_FAMFS_DAX)
+	init_rwsem(&fc->famfs_devlist_sem);
+#endif
+}
+
 static inline void famfs_meta_free(struct fuse_inode *fi)
 {
-	/* Stub wil be connected in a subsequent commit */
+#if IS_ENABLED(CONFIG_FUSE_FAMFS_DAX)
+	if (fi->famfs_meta != NULL) {
+		__famfs_meta_free(fi->famfs_meta);
+		famfs_meta_set(fi, NULL);
+	}
+#endif
 }
 
 static inline int fuse_file_famfs(struct fuse_inode *fi)

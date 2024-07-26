@@ -118,7 +118,7 @@ static struct inode *fuse_alloc_inode(struct super_block *sb)
 		fuse_inode_backing_set(fi, NULL);
 
 	if (IS_ENABLED(CONFIG_FUSE_FAMFS_DAX))
-		famfs_meta_set(fi, NULL);
+		famfs_meta_init(fi);
 
 	return &fi->inode;
 
@@ -1050,7 +1050,7 @@ void fuse_conn_put(struct fuse_conn *fc)
 		if (IS_ENABLED(CONFIG_FUSE_PASSTHROUGH))
 			fuse_backing_files_free(fc);
 		if (IS_ENABLED(CONFIG_FUSE_FAMFS_DAX))
-			kfree(fc->shadow);
+			famfs_teardown(fc);
 		call_rcu(&fc->rcu, delayed_release);
 	}
 }
@@ -1437,7 +1437,7 @@ static void process_init_reply(struct fuse_mount *fm, struct fuse_args *args,
 				 * those capabilities, they are held here).
 				 */
 				fc->famfs_iomap = 1;
-				init_rwsem(&fc->famfs_devlist_sem);
+				famfs_init_devlist_sem(fc);
 			}
 		} else {
 			ra_pages = fc->max_read / PAGE_SIZE;
