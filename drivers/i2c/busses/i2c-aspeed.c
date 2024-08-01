@@ -997,7 +997,7 @@ MODULE_DEVICE_TABLE(of, aspeed_i2c_bus_of_table);
 static int aspeed_i2c_probe_bus(struct platform_device *pdev)
 {
 	struct aspeed_i2c_bus *bus;
-	struct clk *parent_clk;
+	/*struct clk *parent_clk;*/
 	int irq, ret;
 
 	bus = devm_kzalloc(&pdev->dev, sizeof(*bus), GFP_KERNEL);
