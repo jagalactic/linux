@@ -15,6 +15,19 @@
 
 extern const struct file_operations famfs_file_operations;
 
+struct famfs_meta_simple_ext {
+	u64 dev_index;
+	u64 ext_offset;
+	u64 ext_len;
+};
+
+struct famfs_meta_interleaved_ext {
+	u64 fie_nstrips;
+	u64 fie_chunk_size;
+	u64 fie_nbytes;
+	struct famfs_meta_simple_ext *ie_strips;
+};
+
 /*
  * Each famfs dax file has this hanging from its inode->i_private.
  */
@@ -22,9 +35,17 @@ struct famfs_file_meta {
 	bool                   error;
 	enum famfs_file_type   file_type;
 	size_t                 file_size;
-	enum famfs_extent_type tfs_extent_type;
-	size_t                 tfs_extent_ct;
-	struct famfs_extent    tfs_extents[];
+	enum famfs_extent_type fm_extent_type;
+	union { /* This will make code a bit more readable */
+		struct {
+			size_t         fm_nextents;
+			struct famfs_meta_simple_ext  *se;
+		};
+		struct {
+			size_t         fm_niext;
+			struct famfs_meta_interleaved_ext *ie;
+		};
+	};
 };
 
 struct famfs_mount_opts {
