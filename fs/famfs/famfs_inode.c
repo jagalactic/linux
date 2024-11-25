@@ -77,14 +77,37 @@ static struct inode *famfs_get_inode(struct super_block *sb,
  * famfs inode_operations: these are currently pretty much boilerplate
  */
 
+static int
+famfs_setattr(
+	struct mnt_idmap *idmap,
+	struct dentry *dentry,
+	struct iattr *iattr)
+{
+	/* Famfs does not allow changing the size of a file */
+	if (iattr->ia_valid & ATTR_SIZE) {
+		struct inode *inode = d_inode(dentry);
+
+		if (iattr->ia_size != i_size_read(inode))
+			return -EPERM;
+	}
+
+	return simple_setattr(idmap, dentry, iattr);
+}
+
 static const struct inode_operations famfs_file_inode_operations = {
 	/* All generic */
-	.setattr	   = simple_setattr,
+	.setattr	   = famfs_setattr,
 	.getattr	   = simple_getattr,
 };
 
 /*
  * File creation. Allocate an inode, and we're done..
+ *
+ * File creation is allowed because the famfs lib/cli needs to create a file
+ * and then pass in its fmap. But there is no way to get a file from empty
+ * to non-empty without passing in an fmap.
+ *
+ * We could use a way to prevent this for callers other than the cli/lib.
  */
 static int
 famfs_mknod(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry,
@@ -110,6 +133,10 @@ famfs_mknod(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry,
 	return 0;
 }
 
+/*
+ * mkdir is allowed because the cli/lib need it. We could use a way to
+ * prevent this *unless* the caller is the cli/lib.
+ */
 static int famfs_mkdir(struct mnt_idmap *idmap, struct inode *dir,
 		       struct dentry *dentry, umode_t mode)
 {
@@ -139,14 +166,53 @@ static int famfs_create(struct mnt_idmap *idmap, struct inode *dir,
 	return famfs_mknod(&nop_mnt_idmap, dir, dentry, mode | S_IFREG, 0);
 }
 
+static int
+famfs_link(struct dentry *old_dentry, struct inode *dir, struct dentry *dentry)
+{
+	pr_notice("%s: blocking link\n", __func__);
+	return -EPERM; /* hard linking not supported by famfs */
+}
+
+static int famfs_unlink(struct inode *dir, struct dentry *dentry)
+{
+	struct inode *inode = d_inode(dentry);
+
+	if (inode->i_private) {
+		/* assume this means it's a famfs file with an fmap */
+		pr_notice("%s: blocking unlink\n", __func__);
+		return -EPERM; /* famfs does not support unlink through this path */
+	}
+
+	return simple_unlink(dir, dentry);
+}
+
+static int famfs_rmdir(struct inode *dir, struct dentry *dentry)
+{
+	pr_notice("%s: blocking rmdir\n", __func__);
+	return -EPERM;
+}
+
+static int
+famfs_rename(
+	struct mnt_idmap *idmap,
+	struct inode *old_dir,
+	struct dentry *old_dentry,
+	struct inode *new_dir,
+	struct dentry *new_dentry,
+	unsigned int flags)
+{
+	pr_notice("%s: blocking rename\n", __func__);
+	return -EPERM;
+}
+
 static const struct inode_operations famfs_dir_inode_operations = {
 	.create		= famfs_create,
 	.lookup		= simple_lookup,
-	.link		= simple_link,
-	.unlink		= simple_unlink,
+	.link		= famfs_link,
+	.unlink		= famfs_unlink,
 	.mkdir		= famfs_mkdir,
-	.rmdir		= simple_rmdir,
-	.rename		= simple_rename,
+	.rmdir		= famfs_rmdir,
+	.rename		= famfs_rename,
 };
 
 /*****************************************************************************
