@@ -248,8 +248,8 @@ int cxl_map_device_regs(const struct cxl_register_map *map,
 		{ &map->device_map.memdev, &regs->memdev, },
 	};
 	int i;
-    int limit = regs->status ? ARRAY_SIZE(mapinfo) : 1;
-	for (i = 0; i < limit; i++) {
+    // int limit = regs->status ? ARRAY_SIZE(mapinfo) : 1;
+	for (i = 0; i < ARRAY_SIZE(mapinfo); i++) {
 		struct mapinfo *mi = &mapinfo[i];
 		resource_size_t length;
 		resource_size_t addr;
