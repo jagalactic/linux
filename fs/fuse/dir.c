@@ -396,6 +396,10 @@ int fuse_lookup_name(struct super_block *sb, u64 nodeid, const struct qstr *name
 		outarg->generation = 0;
 	}
 
+	pr_notice("%s: nodeid=%lld attr.ino=%lld outarg->nodeid=%lld gen=%lld\n",
+		  __func__, nodeid, outarg->attr.ino, outarg->nodeid,
+		  outarg->generation);
+
 	*inode = fuse_iget(sb, outarg->nodeid, outarg->generation,
 			   &outarg->attr, ATTR_TIMEOUT(outarg),
 			   attr_version, evict_ctr);

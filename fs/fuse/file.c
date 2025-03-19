@@ -251,6 +251,9 @@ fuse_get_fmap(struct fuse_mount *fm, struct inode *inode, u64 nodeid)
 	if (fi->famfs_meta)
 		return 0;
 
+	pr_notice("%s: nodeid=%llx, i_ino=%llx\n", __func__,
+		  nodeid, (u64)inode->i_ino);
+
 	fmap_buf = kcalloc(1, FMAP_BUFSIZE, GFP_KERNEL);
 	if (!fmap_buf)
 		return -EIO;
@@ -282,6 +285,9 @@ fuse_get_fmap(struct fuse_mount *fm, struct inode *inode, u64 nodeid)
 		return rc;
 	}
 	fmap_size = rc;
+	pr_notice("%s: fmap is %d bytes\n", __func__, rc);
+	pr_notice("%s: nodeid=%llx alloc_size=%ld fmap_size=%ld\n",
+		  __func__, nodeid, fmap_bufsize, fmap_size);
 
 	if (retries && fmap_size == sizeof(uint32_t)) {
 		/* fmap size exceeded fmap_bufsize;

@@ -1438,6 +1438,14 @@ static void process_init_reply(struct fuse_mount *fm, struct fuse_args *args,
 				 */
 				fc->famfs_iomap = 1;
 				famfs_init_devlist_sem(fc);
+			} else if (!IS_ENABLED(CONFIG_FUSE_FAMFS_DAX)) {
+				/* This warning is useful to catch
+				 * fuse.h incompatibility between
+				 * libfuse and kernel, prior to the
+				 * famfs kernel merge
+				 */
+				pr_err("%s: famfs_iomap not selected\n",
+				       __func__); 
 			}
 		} else {
 			ra_pages = fc->max_read / PAGE_SIZE;

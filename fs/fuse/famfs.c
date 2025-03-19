@@ -125,6 +125,8 @@ famfs_fuse_get_daxdev(struct fuse_mount *fm, const u64 index)
 
 	FUSE_ARGS(args);
 
+	pr_notice("%s: index=%lld\n", __func__, index);
+
 	/* Store the daxdev in our table */
 	if (index >= fc->dax_devlist->nslots) {
 		pr_err("%s: index(%lld) > nslots(%d)\n",
@@ -258,6 +260,9 @@ famfs_update_daxdev_table(
 			if (!(fc->dax_devlist->devlist[i].valid)) {
 				up_read(&fc->famfs_devlist_sem);
 
+				pr_notice("%s: daxdev=%d (%llx) invalid...getting\n",
+					  __func__, i,
+					  (u64)(&fc->dax_devlist->devlist[i]));
 				err = famfs_fuse_get_daxdev(fm, i);
 				if (err)
 					pr_err("%s: failed to get daxdev=%d\n",
