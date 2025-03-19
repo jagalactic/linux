@@ -111,4 +111,6 @@ int famfs_devlist_alloc(struct famfs_fs_info *fsi);
 int famfs_install_daxdev(struct famfs_fs_info *fsi, struct super_block *sb,
 			 u64 index, dev_t devno, const char *name);
 
+void famfs_meta_free(struct famfs_file_meta *map);
+
 #endif /* FAMFS_INTERNAL_H */
