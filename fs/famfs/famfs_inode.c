@@ -234,10 +234,20 @@ static int famfs_show_options(struct seq_file *m, struct dentry *root)
 	return 0;
 }
 
+static void famfs_evict_inode(struct inode *inode)
+{
+	famfs_meta_free((struct famfs_file_meta *)inode->i_private);
+	inode->i_private = NULL;
+	dax_break_layout_final(inode);
+	truncate_inode_pages_final(&inode->i_data);
+	clear_inode(inode);
+}
+
 static const struct super_operations famfs_super_ops = {
 	.statfs		= simple_statfs,
 	.drop_inode	= inode_just_drop,
 	.show_options	= famfs_show_options,
+	.evict_inode    = famfs_evict_inode,
 };
 
 /*****************************************************************************/
