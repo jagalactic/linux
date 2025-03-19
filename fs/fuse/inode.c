@@ -1028,6 +1028,9 @@ void fuse_conn_init(struct fuse_conn *fc, struct fuse_mount *fm,
 	if (IS_ENABLED(CONFIG_FUSE_PASSTHROUGH))
 		fuse_backing_files_init(fc);
 
+	if (IS_ENABLED(CONFIG_FUSE_FAMFS_DAX))
+		pr_notice("%s: Kernel is FUSE_FAMFS_DAX capable\n", __func__);
+
 	INIT_LIST_HEAD(&fc->mounts);
 	list_add(&fm->fc_entry, &fc->mounts);
 	fm->fc = fc;
@@ -1496,7 +1499,21 @@ static void process_init_reply(struct fuse_mount *fm, struct fuse_args *args,
 				if (in_flags & FUSE_DAX_FMAP) {
 					fc->famfs_iomap = 1;
 					famfs_init_devlist_sem(fc);
+					pr_err("%s: famfs_iomap good\n",
+					       __func__);
+				} else {
+					pr_err("%s: famfs_iomap denied\n",
+					       __func__);
+					ok = false;
 				}
+			} else if (!IS_ENABLED(CONFIG_FUSE_FAMFS_DAX)) {
+				/* This warning is useful to catch
+				 * fuse.h incompatibility between
+				 * libfuse and kernel, prior to the
+				 * famfs kernel merge
+				 */
+				pr_err("%s: famfs_iomap not selected\n",
+				       __func__);
 			}
 		} else {
 			ra_pages = fc->max_read / PAGE_SIZE;
@@ -1559,8 +1576,14 @@ static struct fuse_init_args *fuse_new_init(struct fuse_mount *fm)
 		flags |= FUSE_SUBMOUNTS;
 	if (IS_ENABLED(CONFIG_FUSE_PASSTHROUGH))
 		flags |= FUSE_PASSTHROUGH;
-	if (IS_ENABLED(CONFIG_FUSE_FAMFS_DAX) && capable(CAP_SYS_RAWIO))
-		flags |= FUSE_DAX_FMAP;
+	if (IS_ENABLED(CONFIG_FUSE_FAMFS_DAX)) {
+		if (capable(CAP_SYS_RAWIO)) {
+			flags |= FUSE_DAX_FMAP;
+			pr_notice("%s: CAP_SYS_RAWIO ok: offering FUSE_DAX_IOMAP\n", __func__);
+		} else {
+			pr_notice("%s: CAP_SYS_RAWIO missing: NOT offering FUSE_DAX_IOMAP\n", __func__);
+		}
+	}
 
 	/*
 	 * This is just an information flag for fuse server. No need to check

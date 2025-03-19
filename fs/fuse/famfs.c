@@ -127,6 +127,8 @@ famfs_fuse_get_daxdev(struct fuse_mount *fm, const u64 index)
 
 	FUSE_ARGS(args);
 
+	pr_notice("%s: index=%lld\n", __func__, index);
+
 	/* Store the daxdev in our table */
 	if (index >= fc->dax_devlist->nslots) {
 		pr_err("%s: index(%lld) > nslots(%d)\n",
@@ -261,6 +263,10 @@ famfs_update_daxdev_table(
 		 */
 		if (!(fc->dax_devlist->devlist[i].valid)) {
 			up_read(&fc->famfs_devlist_sem);
+
+			pr_notice("%s: daxdev=%d (%llx) invalid...getting\n",
+				  __func__, i,
+				  (u64)(&fc->dax_devlist->devlist[i]));
 
 			err = famfs_fuse_get_daxdev(fm, i);
 			if (err)
@@ -1107,6 +1113,9 @@ fuse_get_fmap(struct fuse_mount *fm, struct inode *inode)
 	if (fi->famfs_meta)
 		return 0;
 
+	pr_notice("%s: nodeid=%llx, i_ino=%llx\n", __func__,
+		  nodeid, (u64)inode->i_ino);
+
 	fmap_buf = kcalloc(1, FMAP_BUFSIZE, GFP_KERNEL);
 	if (!fmap_buf)
 		return -EIO;
@@ -1132,6 +1141,10 @@ fuse_get_fmap(struct fuse_mount *fm, struct inode *inode)
 	}
 	fmap_size = rc;
 
+ 	pr_notice("%s: fmap is %d bytes\n", __func__, rc);
+ 	pr_notice("%s: nodeid=%llx alloc_size=%ld fmap_size=%ld\n",
+ 		  __func__, nodeid, fmap_bufsize, fmap_size);
+ 
 	/* Convert fmap into in-memory format and hang from inode */
 	famfs_file_init_dax(fm, inode, fmap_buf, fmap_size);
 
