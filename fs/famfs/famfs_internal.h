@@ -70,4 +70,7 @@ struct famfs_fs_info {
 	bool                     deverror;
 };
 
+void famfs_meta_free(struct famfs_file_meta *map);
+
+
 #endif /* FAMFS_INTERNAL_H */
