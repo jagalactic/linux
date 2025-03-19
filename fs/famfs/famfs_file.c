@@ -50,7 +50,7 @@ famfs_meta_alloc_v1(struct famfs_file_meta **metap, size_t ext_count)
 	return 0;
 }
 
-static void
+void
 famfs_meta_free(struct famfs_file_meta *map)
 {
 	if (map) {
