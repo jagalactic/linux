@@ -498,8 +498,10 @@ famfs_fuse_meta_alloc(
 			/* Move past one interleaved extent header in fmap_buf */
 			next_offset += sizeof(*ie_in);
 			if (next_offset > fmap_buf_size) {
-				pr_err("%s:%d: fmap_buf underflow offset/size %ld/%ld\n",
-				       __func__, __LINE__, next_offset, fmap_buf_size);
+				pr_err("%s:%d: fmap_buf underflow "
+				       "offset/size %ld/%ld\n",
+				       __func__, __LINE__, next_offset,
+				       fmap_buf_size);
 				rc = -EINVAL;
 				goto errout;
 			}
@@ -523,8 +525,10 @@ famfs_fuse_meta_alloc(
 			/* Move past strip extents in fmap_buf */
 			next_offset += nstrips * sizeof(*sie_in);
 			if (next_offset > fmap_buf_size) {
-				pr_err("%s:%d: fmap_buf underflow offset/size %ld/%ld\n",
-				       __func__, __LINE__, next_offset, fmap_buf_size);
+				pr_err("%s:%d: fmap_buf underflow "
+				       "offset/size %ld/%ld\n",
+				       __func__, __LINE__, next_offset,
+				       fmap_buf_size);
 				rc = -EINVAL;
 				goto errout;
 			}

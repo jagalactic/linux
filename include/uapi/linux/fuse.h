@@ -1313,8 +1313,8 @@ struct fuse_uring_cmd_req {
 #define FAMFS_FMAP_VERSION 1
 
 #define FAMFS_FMAP_MAX 32768 /* Largest supported fmap message */
-#define FUSE_FAMFS_MAX_EXTENTS 2
-#define FUSE_FAMFS_MAX_STRIPS 16
+#define FUSE_FAMFS_MAX_EXTENTS 32
+#define FUSE_FAMFS_MAX_STRIPS 3
 
 enum fuse_famfs_file_type {
 	FUSE_FAMFS_FILE_REG,
@@ -1337,7 +1337,8 @@ struct fuse_famfs_simple_ext {
 struct fuse_famfs_iext { /* Interleaved extent */
 	uint32_t ie_nstrips;
 	uint32_t ie_chunk_size;
-	uint64_t ie_nbytes; /* Total bytes for this interleaved_ext; sum of strips may be more */
+	uint64_t ie_nbytes; /* Total bytes for this interleaved_ext;
+			     * sum of strips may be more */
 	uint64_t reserved;
 };
 
