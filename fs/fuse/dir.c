@@ -397,7 +397,7 @@ int fuse_lookup_name(struct super_block *sb, u64 nodeid, const struct qstr *name
 	}
 
 	pr_notice("%s: nodeid=%lld attr.ino=%lld outarg->nodeid=%lld "
-		  "generation=%lld\n",
+		  "gen=%lld\n",
 		  __func__, nodeid, outarg->attr.ino, outarg->nodeid,
 		  outarg->generation);
 
