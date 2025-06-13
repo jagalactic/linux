@@ -239,9 +239,10 @@ fuse_get_fmap(struct fuse_mount *fm, struct inode *inode, u64 nodeid)
 {
 	struct fuse_get_fmap_in inarg = { 0 };
 	size_t fmap_bufsize = FMAP_BUFSIZE;
-	size_t fmap_size;
+	ssize_t fmap_size;
+	int retries = 1;
 	void *fmap_buf;
-	int err;
+	int rc;
 	FUSE_ARGS(args);
 
 	pr_notice("%s: nodeid=%llx, i_ino=%llx\n", __func__,
@@ -250,7 +251,8 @@ fuse_get_fmap(struct fuse_mount *fm, struct inode *inode, u64 nodeid)
 	if (!fmap_buf)
 		return -EIO;
 
-	inarg.size = FMAP_BUFSIZE;
+ retry_once:
+	inarg.size = fmap_bufsize;
 
 	args.opcode = FUSE_GET_FMAP;
 	args.nodeid = nodeid;
@@ -269,16 +271,38 @@ fuse_get_fmap(struct fuse_mount *fm, struct inode *inode, u64 nodeid)
 	args.out_args[0].value = fmap_buf;
        
 	/* Send GET_FMAP command */
-	err = fuse_simple_request(fm, &args);
-	if (err < 0) {
+	rc = fuse_simple_request(fm, &args);
+	if (rc < 0) {
 		pr_err("%s: err=%d from fuse_simple_request()\n",
-		       __func__, err);
-		return err;
+		       __func__, rc);
+		return rc;
 	}
-	fmap_size = err;
-	pr_notice("%s: fmap is %d bytes\n", __func__, err);
+	fmap_size = rc;
+	pr_notice("%s: fmap is %d bytes\n", __func__, rc);
 	pr_notice("%s: nodeid=%llx alloc_size=%ld fmap_size=%ld\n",
 		  __func__, nodeid, fmap_bufsize, fmap_size);
+
+	if (retries && fmap_size == sizeof(uint32_t)) {
+		/* fmap size exceeded fmap_bufsize;
+		 * actual fmap size returned in fmap_buf;
+		 * realloc and retry once */
+		fmap_bufsize = *((uint32_t *)fmap_buf);
+
+		if (fmap_bufsize < fmap_msg_min_size()
+		    || fmap_bufsize > FAMFS_FMAP_MAX) {
+			pr_err("%s: fmap_size=%ld out of range\n",
+			       __func__, fmap_bufsize);
+			       return -EIO;
+		}
+
+		--retries;
+		kfree(fmap_buf);
+		fmap_buf = kcalloc(1, fmap_bufsize, GFP_KERNEL);
+		if (!fmap_buf)
+			return -EIO;
+
+		goto retry_once;
+	}
 
 	/* Convert fmap into in-memory format and hang from inode */
 	famfs_file_init_dax(fm, inode, fmap_buf, fmap_size);

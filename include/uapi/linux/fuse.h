@@ -1312,6 +1312,7 @@ struct fuse_uring_cmd_req {
 
 #define FAMFS_FMAP_VERSION 1
 
+#define FAMFS_FMAP_MAX 32768 /* Largest supported fmap message */
 #define FUSE_FAMFS_MAX_EXTENTS 2
 #define FUSE_FAMFS_MAX_STRIPS 16
 
@@ -1350,6 +1351,13 @@ struct fuse_famfs_fmap_header {
 	uint64_t file_size;
 	uint64_t reserved1;
 };
+
+static inline int32_t fmap_msg_min_size(void)
+{
+	/* Smallest fmap message is a header plus one simple extent */
+	return (sizeof(struct fuse_famfs_fmap_header)
+		+ sizeof(struct fuse_famfs_simple_ext));
+}
 
 struct fuse_get_daxdev_in {
 	uint32_t        daxdev_num;
