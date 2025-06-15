@@ -1429,10 +1429,21 @@ static void process_init_reply(struct fuse_mount *fm, struct fuse_args *args,
 			}
 			if (flags & FUSE_OVER_IO_URING && fuse_uring_enabled())
 				fc->io_uring = 1;
-			if (IS_ENABLED(CONFIG_FUSE_FAMFS_DAX) &&
-			    flags & FUSE_DAX_FMAP) {
-				fc->famfs_iomap = 1;
-				init_rwsem(&fc->famfs_devlist_sem);
+			if (IS_ENABLED(CONFIG_FUSE_FAMFS_DAX)) {
+				if (flags & FUSE_DAX_FMAP) {
+					pr_notice("%s: Enabling famfs_iomap\n",
+						  __func__);
+					fc->famfs_iomap = 1;
+					init_rwsem(&fc->famfs_devlist_sem);
+				} else {
+					/* This warning is useful to catch
+					 * fuse.h incompatibility between
+					 * libfuse and kernel, prior to the
+					 * famfs kernel merge
+					 */
+					pr_err("%s: famfs_iomap not selected\n",
+					       __func__);
+				}
 			}
 		} else {
 			ra_pages = fc->max_read / PAGE_SIZE;

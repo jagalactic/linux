@@ -323,7 +323,8 @@ static int fuse_open(struct inode *inode, struct file *file)
 	bool is_wb_truncate = is_truncate && fc->writeback_cache;
 	bool dax_truncate = is_truncate && FUSE_IS_VIRTIO_DAX(fi);
 
-	/* XXX: Does famfs need to deal with truncate? */
+	pr_notice("%s:\n", __func__);
+
 	if (fuse_is_bad(inode))
 		return -EIO;
 
@@ -347,11 +348,20 @@ static int fuse_open(struct inode *inode, struct file *file)
 	err = fuse_do_open(fm, get_node_id(inode), file, false);
 	if (!err) {
 #if IS_ENABLED(CONFIG_FUSE_FAMFS_DAX)
-		if (fm->fc->famfs_iomap)
-			if (S_ISREG(inode->i_mode))
+		pr_notice("%s: FUSE_FAMFS_DAX enabled\n", __func__);
+		if (fm->fc->famfs_iomap) {
+			pr_notice("%s: famfs_iomap enabled\n", __func__);
+			if (S_ISREG(inode->i_mode)) {
+				int rc;
 				/* Get the famfs fmap */
-				fuse_get_fmap(fm, inode, get_node_id(inode));
-
+				pr_notice("%s: trying get_fmap\n", __func__);
+				rc = fuse_get_fmap(fm, inode,
+						   get_node_id(inode));
+				if (rc)
+					pr_err("%s: fuse_get_fmap err=%d\n",
+					       __func__, rc);
+			}
+		}
 #endif
 		ff = file->private_data;
 		err = fuse_finish_open(inode, file);

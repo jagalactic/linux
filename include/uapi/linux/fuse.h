@@ -1314,7 +1314,7 @@ struct fuse_uring_cmd_req {
 
 #define FAMFS_FMAP_MAX 32768 /* Largest supported fmap message */
 #define FUSE_FAMFS_MAX_EXTENTS 32
-#define FUSE_FAMFS_MAX_STRIPS 3
+#define FUSE_FAMFS_MAX_STRIPS 32
 
 enum fuse_famfs_file_type {
 	FUSE_FAMFS_FILE_REG,
