@@ -4,7 +4,7 @@
 #
 
 # Needed for trace events
-ccflags-y = -I$(src)
+ccflags-y = -I$(src) -g -DDEBUG -fno-inline -fno-omit-frame-pointer
 
 obj-$(CONFIG_FUSE_FS) += fuse.o
 obj-$(CONFIG_CUSE) += cuse.o
@@ -16,5 +16,6 @@ fuse-$(CONFIG_FUSE_DAX) += dax.o
 fuse-$(CONFIG_FUSE_PASSTHROUGH) += passthrough.o
 fuse-$(CONFIG_SYSCTL) += sysctl.o
 fuse-$(CONFIG_FUSE_IO_URING) += dev_uring.o
+fuse-$(CONFIG_FUSE_FAMFS_DAX) += famfs.o
 
 virtiofs-y := virtio_fs.o

@@ -117,6 +117,9 @@ static struct inode *fuse_alloc_inode(struct super_block *sb)
 	if (IS_ENABLED(CONFIG_FUSE_PASSTHROUGH))
 		fuse_inode_backing_set(fi, NULL);
 
+	if (IS_ENABLED(CONFIG_FUSE_FAMFS_DAX))
+		famfs_meta_init(fi);
+
 	return &fi->inode;
 
 out_free_forget:
@@ -137,6 +140,9 @@ static void fuse_free_inode(struct inode *inode)
 #endif
 	if (IS_ENABLED(CONFIG_FUSE_PASSTHROUGH))
 		fuse_backing_put(fuse_inode_backing(fi));
+
+	if (S_ISREG(inode->i_mode) && fuse_file_famfs(fi))
+		famfs_meta_free(fi);
 
 	kmem_cache_free(fuse_inode_cachep, fi);
 }
@@ -164,7 +170,7 @@ static void fuse_evict_inode(struct inode *inode)
 	if (inode->i_sb->s_flags & SB_ACTIVE) {
 		struct fuse_conn *fc = get_fuse_conn(inode);
 
-		if (FUSE_IS_DAX(inode))
+		if (FUSE_IS_VIRTIO_DAX(fi))
 			fuse_dax_inode_cleanup(inode);
 		if (fi->nlookup) {
 			fuse_queue_forget(fc, fi->forget, fi->nodeid,
@@ -766,6 +772,9 @@ enum {
 	OPT_ALLOW_OTHER,
 	OPT_MAX_READ,
 	OPT_BLKSIZE,
+#if IS_ENABLED(CONFIG_FUSE_FAMFS_DAX)
+	OPT_SHADOW,
+#endif
 	OPT_ERR
 };
 
@@ -780,6 +789,9 @@ static const struct fs_parameter_spec fuse_fs_parameters[] = {
 	fsparam_u32	("max_read",		OPT_MAX_READ),
 	fsparam_u32	("blksize",		OPT_BLKSIZE),
 	fsparam_string	("subtype",		OPT_SUBTYPE),
+#if IS_ENABLED(CONFIG_FUSE_FAMFS_DAX)
+	fsparam_string("shadow",		OPT_SHADOW),
+#endif
 	{}
 };
 
@@ -875,6 +887,15 @@ static int fuse_parse_param(struct fs_context *fsc, struct fs_parameter *param)
 		ctx->blksize = result.uint_32;
 		break;
 
+#if IS_ENABLED(CONFIG_FUSE_FAMFS_DAX)
+	case OPT_SHADOW:
+		if (ctx->shadow)
+			return invalfc(fsc, "Multiple shadows specified");
+		ctx->shadow = param->string;
+		param->string = NULL;
+		break;
+#endif
+
 	default:
 		return -EINVAL;
 	}
@@ -888,6 +909,7 @@ static void fuse_free_fsc(struct fs_context *fsc)
 
 	if (ctx) {
 		kfree(ctx->subtype);
+		kfree(ctx->shadow);
 		kfree(ctx);
 	}
 }
@@ -919,7 +941,10 @@ static int fuse_show_options(struct seq_file *m, struct dentry *root)
 	else if (fc->dax_mode == FUSE_DAX_INODE_USER)
 		seq_puts(m, ",dax=inode");
 #endif
-
+#if IS_ENABLED(CONFIG_FUSE_FAMFS_DAX)
+	if (fc->shadow)
+		seq_printf(m, ",shadow=%s", fc->shadow);
+#endif
 	return 0;
 }
 
@@ -983,6 +1008,9 @@ void fuse_conn_init(struct fuse_conn *fc, struct fuse_mount *fm,
 	if (IS_ENABLED(CONFIG_FUSE_PASSTHROUGH))
 		fuse_backing_files_init(fc);
 
+	if (IS_ENABLED(CONFIG_FUSE_FAMFS_DAX))
+		pr_notice("%s: Kernel is FUSE_FAMFS_DAX capable\n", __func__);
+
 	INIT_LIST_HEAD(&fc->mounts);
 	list_add(&fm->fc_entry, &fc->mounts);
 	fm->fc = fc;
@@ -1017,6 +1045,7 @@ void fuse_conn_put(struct fuse_conn *fc)
 		}
 		if (IS_ENABLED(CONFIG_FUSE_PASSTHROUGH))
 			fuse_backing_files_free(fc);
+		famfs_teardown(fc);
 		call_rcu(&fc->rcu, delayed_release);
 	}
 }
@@ -1392,6 +1421,38 @@ static void process_init_reply(struct fuse_mount *fm, struct fuse_args *args,
 			}
 			if (flags & FUSE_OVER_IO_URING && fuse_uring_enabled())
 				fc->io_uring = 1;
+			if (IS_ENABLED(CONFIG_FUSE_FAMFS_DAX) &&
+			    flags & FUSE_DAX_FMAP) {
+				/* famfs_iomap is only allowed if the fuse
+				 * server has CAP_SYS_RAWIO. This was checked
+				 * in fuse_send_init, and FUSE_DAX_IOMAP was
+				 * set in in_flags if so. Only allow enablement
+				 * if we find it there. This function is normally
+				 * not running in fuse server context, so we can
+				 * do the capability check here...
+				 */
+				u64 in_flags = ((u64)ia->in.flags2 << 32)
+						| ia->in.flags;
+
+				if (in_flags & FUSE_DAX_FMAP) {
+					fc->famfs_iomap = 1;
+					famfs_init_devlist_sem(fc);
+					pr_err("%s: famfs_iomap good\n",
+					       __func__);
+				} else {
+					pr_err("%s: famfs_iomap denied\n",
+					       __func__);
+					ok = false;
+				}
+			} else if (!IS_ENABLED(CONFIG_FUSE_FAMFS_DAX)) {
+				/* This warning is useful to catch
+				 * fuse.h incompatibility between
+				 * libfuse and kernel, prior to the
+				 * famfs kernel merge
+				 */
+				pr_err("%s: famfs_iomap not selected\n",
+				       __func__);
+			}
 		} else {
 			ra_pages = fc->max_read / PAGE_SIZE;
 			fc->no_lock = 1;
@@ -1450,6 +1511,14 @@ void fuse_send_init(struct fuse_mount *fm)
 		flags |= FUSE_SUBMOUNTS;
 	if (IS_ENABLED(CONFIG_FUSE_PASSTHROUGH))
 		flags |= FUSE_PASSTHROUGH;
+	if (IS_ENABLED(CONFIG_FUSE_FAMFS_DAX)) {
+		if (capable(CAP_SYS_RAWIO)) {
+			flags |= FUSE_DAX_FMAP;
+			pr_notice("%s: CAP_SYS_RAWIO ok: offering FUSE_DAX_IOMAP\n", __func__);
+		} else {
+			pr_notice("%s: CAP_SYS_RAWIO missing: NOT offering FUSE_DAX_IOMAP\n", __func__);
+		}
+	}
 
 	/*
 	 * This is just an information flag for fuse server. No need to check
@@ -1820,6 +1889,10 @@ int fuse_fill_super_common(struct super_block *sb, struct fuse_fs_context *ctx)
 	sb->s_root = root_dentry;
 	if (ctx->fudptr)
 		*ctx->fudptr = fud;
+
+#if IS_ENABLED(CONFIG_FUSE_FAMFS_DAX)
+	fc->shadow = kstrdup(ctx->shadow, GFP_KERNEL);
+#endif
 	mutex_unlock(&fuse_mutex);
 	return 0;
 

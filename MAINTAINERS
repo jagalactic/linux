@@ -9543,6 +9543,16 @@ F:	Documentation/filesystems/fuse.rst
 F:	fs/fuse/
 F:	include/uapi/linux/fuse.h
 
+FUSE [FAMFS Fabric-Attached Memory File System]
+M:	John Groves <jgroves@micron.com>
+M:	John Groves <John@Groves.net>
+L:	linux-cxl@vger.kernel.org
+L:	linux-fsdevel@vger.kernel.org
+S:	Supported
+F:	Documentation/filesystems/famfs.rst
+F:	fs/fuse/famfs.c
+F:	fs/fuse/famfs_kfmap.h
+
 FUTEX SUBSYSTEM
 M:	Thomas Gleixner <tglx@linutronix.de>
 M:	Ingo Molnar <mingo@redhat.com>

@@ -2,7 +2,7 @@
 VERSION = 6
 PATCHLEVEL = 14
 SUBLEVEL = 11
-EXTRAVERSION = -famfs_standalone
+EXTRAVERSION = -famfs_dualv3
 NAME = Baby Opossum Posse
 
 # *DOCUMENTATION*

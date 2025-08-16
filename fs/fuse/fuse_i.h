@@ -193,6 +193,14 @@ struct fuse_inode {
 	/** Reference to backing file in passthrough mode */
 	struct fuse_backing *fb;
 #endif
+
+#if IS_ENABLED(CONFIG_FUSE_FAMFS_DAX)
+	/* Pointer to the file's famfs metadata. Primary content is the
+	 * in-memory version of the fmap - the map from file's offset range
+	 * to DAX memory
+	 */
+	void *famfs_meta;
+#endif
 };
 
 /** FUSE inode state bits */
@@ -583,8 +591,10 @@ struct fuse_fs_context {
 	unsigned int blksize;
 	const char *subtype;
 
-	/* DAX device, may be NULL */
+	/* DAX device for virtiofs, may be NULL */
 	struct dax_device *dax_dev;
+
+	const char *shadow; /* famfs - null if not famfs */
 
 	/* fuse_dev pointer to fill in, should contain NULL on entry */
 	void **fudptr;
@@ -870,6 +880,9 @@ struct fuse_conn {
 	/* Use pages instead of pointer for kernel I/O */
 	unsigned int use_pages_for_kvec_io:1;
 
+	/* dev_dax_iomap support for famfs */
+	unsigned int famfs_iomap:1;
+
 	/* Use io_uring for communication */
 	unsigned int io_uring;
 
@@ -937,6 +950,12 @@ struct fuse_conn {
 #ifdef CONFIG_FUSE_IO_URING
 	/**  uring connection information*/
 	struct fuse_ring *ring;
+#endif
+
+#if IS_ENABLED(CONFIG_FUSE_FAMFS_DAX)
+	struct rw_semaphore famfs_devlist_sem;
+	struct famfs_dax_devlist *dax_devlist;
+	char *shadow;
 #endif
 };
 
@@ -1426,7 +1445,14 @@ void fuse_free_conn(struct fuse_conn *fc);
 
 /* dax.c */
 
-#define FUSE_IS_DAX(inode) (IS_ENABLED(CONFIG_FUSE_DAX) && IS_DAX(inode))
+static inline int fuse_file_famfs(struct fuse_inode *fi); /* forward */
+
+/* This macro is used by virtio_fs, but now it also needs to filter for
+ * "not famfs"
+ */
+#define FUSE_IS_VIRTIO_DAX(fuse_inode) (IS_ENABLED(CONFIG_FUSE_DAX)	\
+					&& IS_DAX(&fuse_inode->inode)	\
+					&& !fuse_file_famfs(fuse_inode))
 
 ssize_t fuse_dax_read_iter(struct kiocb *iocb, struct iov_iter *to);
 ssize_t fuse_dax_write_iter(struct kiocb *iocb, struct iov_iter *from);
@@ -1536,5 +1562,90 @@ extern void fuse_sysctl_unregister(void);
 #define fuse_sysctl_register()		(0)
 #define fuse_sysctl_unregister()	do { } while (0)
 #endif /* CONFIG_SYSCTL */
+
+/* famfs.c */
+
+#if IS_ENABLED(CONFIG_FUSE_FAMFS_DAX)
+int famfs_file_init_dax(struct fuse_mount *fm,
+			     struct inode *inode, void *fmap_buf,
+			     size_t fmap_size);
+ssize_t famfs_fuse_write_iter(struct kiocb *iocb, struct iov_iter *from);
+ssize_t famfs_fuse_read_iter(struct kiocb *iocb, struct iov_iter	*to);
+int famfs_fuse_mmap(struct file *file, struct vm_area_struct *vma);
+void __famfs_meta_free(void *map);
+void famfs_teardown(struct fuse_conn *fc);
+#else
+static inline void famfs_teardown(struct fuse_conn *fc)
+{
+}
+static inline ssize_t famfs_fuse_write_iter(struct kiocb *iocb,
+					    struct iov_iter *to)
+{
+	return -1;
+}
+static inline ssize_t famfs_fuse_read_iter(struct kiocb *iocb,
+					   struct iov_iter *to)
+{
+	return -1;
+}
+static inline int famfs_fuse_mmap(struct file *file,
+				  struct vm_area_struct *vma)
+{
+	return -1;
+}
+#endif
+
+static inline void famfs_meta_init(struct fuse_inode *fi)
+{
+#if IS_ENABLED(CONFIG_FUSE_FAMFS_DAX)
+	fi->famfs_meta = NULL;
+#endif
+}
+
+static inline struct fuse_backing *famfs_meta_set(struct fuse_inode *fi,
+						       void *meta)
+{
+#if IS_ENABLED(CONFIG_FUSE_FAMFS_DAX)
+	return cmpxchg(&fi->famfs_meta, NULL, meta);
+#else
+	return NULL;
+#endif
+}
+
+static inline void famfs_init_devlist_sem(struct fuse_conn *fc)
+{
+#if IS_ENABLED(CONFIG_FUSE_FAMFS_DAX)
+	init_rwsem(&fc->famfs_devlist_sem);
+#endif
+}
+
+static inline void famfs_meta_free(struct fuse_inode *fi)
+{
+#if IS_ENABLED(CONFIG_FUSE_FAMFS_DAX)
+	if (fi->famfs_meta != NULL) {
+		__famfs_meta_free(fi->famfs_meta);
+		famfs_meta_set(fi, NULL);
+	}
+#endif
+}
+
+static inline int fuse_file_famfs(struct fuse_inode *fi)
+{
+#if IS_ENABLED(CONFIG_FUSE_FAMFS_DAX)
+	return (READ_ONCE(fi->famfs_meta) != NULL);
+#else
+	return 0;
+#endif
+}
+
+#if IS_ENABLED(CONFIG_FUSE_FAMFS_DAX)
+int fuse_get_fmap(struct fuse_mount *fm, struct inode *inode);
+#else
+static inline int
+fuse_get_fmap(struct fuse_mount *fm, struct inode *inode)
+{
+	return 0;
+}
+#endif
 
 #endif /* _FS_FUSE_I_H */
