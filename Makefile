@@ -2,7 +2,7 @@
 VERSION = 7
 PATCHLEVEL = 0
 SUBLEVEL = 0
-EXTRAVERSION = -rc6
+EXTRAVERSION = -rc6-famfs_standalone
 NAME = Baby Opossum Posse
 
 # *DOCUMENTATION*
