@@ -1518,7 +1518,7 @@ static int dev_dax_zero_page_range(struct dax_device *dax_dev, pgoff_t pgoff,
 
 static long dev_dax_direct_access(struct dax_device *dax_dev,
 		  pgoff_t pgoff, long nr_pages, enum dax_access_mode mode,
-		  void **kaddr, unsigned long *pfn)
+		  void **kaddr, unsigned long  *pfn)
 {
 	return __dev_dax_direct_access(dax_dev, pgoff, nr_pages, mode, kaddr, pfn);
 }
