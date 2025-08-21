@@ -818,10 +818,12 @@ famfs_fileofs_to_daxofs(struct inode *inode, struct iomap *iomap,
 		loff_t dax_ext_len    = meta->se[i].ext_len;
 		u64 daxdev_idx = meta->se[i].dev_index;
 
+#if 0
 		if ((dax_ext_offset == 0) &&
 		    (meta->file_type != FAMFS_SUPERBLOCK))
 			pr_warn("%s: zero offset on non-superblock file!!\n",
 				__func__);
+#endif
 
 		/* local_offset is the offset minus the size of extents skipped
 		 * so far; If local_offset < dax_ext_len, the data of interest
