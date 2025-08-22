@@ -422,19 +422,30 @@ static void dax_folio_init(void *entry)
 {
 	struct folio *folio = dax_to_folio(entry);
 	int order = dax_entry_order(entry);
+	unsigned int forder = folio_order(folio);
 
 	/*
 	 * Folio should have been split back to order-0 pages in
 	 * dax_folio_put() when they were removed from their
 	 * final mapping.
 	 */
+#if 1
+	if (forder)
+		pr_err("%s: folio order %d\n", __func__, forder);
+#else	  
 	WARN_ON_ONCE(folio_order(folio));
-
+#endif
 	if (order > 0) {
+		unsigned int folio_refct = folio_ref_count(folio);
+
 		prep_compound_page(&folio->page, order);
 		if (order > 1)
 			INIT_LIST_HEAD(&folio->_deferred_list);
+#if 1
+		pr_err("%s: folio refct=%d\n", __func__, folio_refct);
+#else
 		WARN_ON_ONCE(folio_ref_count(folio));
+#endif
 	}
 }
 
