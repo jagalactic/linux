@@ -149,6 +149,15 @@ int fs_dax_get(struct dax_device *dax_dev, void *holder,
 	return 0;
 }
 EXPORT_SYMBOL_GPL(fs_dax_get);
+
+inline bool dax_has_holder(struct dax_device *dax_dev)
+{
+	if (READ_ONCE(dax_dev->holder_data))
+		return true;
+
+	return false;
+}
+EXPORT_SYMBOL_GPL(dax_has_holder);
 #endif /* DEV_DAX_IOMAP */
 
 enum dax_device_flags {

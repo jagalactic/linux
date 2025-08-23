@@ -351,6 +351,10 @@ static int dax_open(struct inode *inode, struct file *filp)
 	struct dev_dax *dev_dax = dax_get_private(dax_dev);
 
 	dev_dbg(&dev_dax->dev, "trace\n");
+
+	if (dax_has_holder(dax_dev))
+		return -EBUSY;
+
 	inode->i_mapping = __dax_inode->i_mapping;
 	inode->i_mapping->host = __dax_inode;
 	inode->i_mapping->a_ops = &dev_dax_aops;

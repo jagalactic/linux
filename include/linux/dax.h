@@ -56,6 +56,12 @@ struct dax_device *alloc_dax(void *private, const struct dax_operations *ops);
 int fs_dax_get(struct dax_device *dax_dev, void *holder, const struct dax_holder_operations *hops);
 struct dax_device *inode_dax(struct inode *inode);
 struct dax_device *dax_dev_get(dev_t devt);
+bool dax_has_holder(struct dax_device *dax_dev);
+#else
+static inline bool dax_has_holder(struct dax_device *dax_dev);
+{
+	return false;
+}
 #endif
 void *dax_holder(struct dax_device *dax_dev);
 void put_dax(struct dax_device *dax_dev);
