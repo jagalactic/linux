@@ -980,15 +980,21 @@ void dax_break_layout_final(struct inode *inode)
 {
 	struct page *page;
 
-	if (!dax_mapping(inode->i_mapping))
+	pr_notice("%s: inode %llx\n", __func__, (u64)inode);
+	if (!dax_mapping(inode->i_mapping)) {
+		pr_notice("%s: no i_mapping\n", __func__);
 		return;
-
+	}
+	pr_notice("%s: inode %llx\n", __func__, (u64)inode);
 	do {
 		page = dax_layout_busy_page_range(inode->i_mapping, 0,
 						LLONG_MAX);
-		if (!page)
+		if (!page) {
+			pr_notice("%s: no more busy pages\n", __func__);
 			break;
+		}
 
+		pr_notice("%s: PFN %lx busy\n", __func__, page_to_pfn(page));
 		wait_page_idle_uninterruptible(page, inode);
 	} while (true);
 

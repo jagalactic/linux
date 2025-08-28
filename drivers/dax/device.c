@@ -387,6 +387,12 @@ static const struct file_operations dax_fops = {
 
 static void dev_dax_cdev_del(void *cdev)
 {
+	struct cdev *my_cdev = (struct cdev *)cdev;
+	pr_warn("%s: kobj=%llx ref=%d\n",
+		__func__, 
+		(u64)&my_cdev->kobj,
+		refcount_read(&my_cdev->kobj.kref.refcount));
+
 	cdev_del(cdev);
 }
 
@@ -474,6 +480,13 @@ static int dev_dax_probe(struct dev_dax *dev_dax)
 	cdev_init(cdev, &dax_fops);
 	cdev->owner = dev->driver->owner;
 	cdev_set_parent(cdev, &dev->kobj);
+
+	pr_warn("%s: kobj=%llx ref=%d\n",
+		__func__,
+		(u64)&cdev->kobj,
+		refcount_read(&cdev->kobj.kref.refcount));
+	//dump_stack();
+
 	rc = cdev_add(cdev, dev->devt, 1);
 	if (rc)
 		return rc;
