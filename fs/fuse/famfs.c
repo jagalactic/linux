@@ -797,6 +797,8 @@ famfs_fileofs_to_daxofs(struct inode *inode, struct iomap *iomap,
 	loff_t local_offset = file_offset;
 	int i;
 
+	pr_notice("%s:\n", __func__);
+
 	if (!fc->dax_devlist) {
 		pr_err("%s: null dax_devlist\n", __func__);
 		goto err_out;
@@ -934,6 +936,7 @@ __famfs_fuse_filemap_fault(struct vm_fault *vmf, unsigned int pe_size,
 	vm_fault_t ret;
 	unsigned long pfn;
 
+	pr_notice("%s:\n", __func__);
 	if (!IS_DAX(file_inode(vmf->vma->vm_file))) {
 		pr_err("%s: file not marked IS_DAX!!\n", __func__);
 		return VM_FAULT_SIGBUS;
@@ -1069,6 +1072,7 @@ famfs_fuse_read_iter(struct kiocb *iocb, struct iov_iter	*to)
 {
 	ssize_t rc;
 
+	pr_notice("%s:\n", __func__);
 	rc = famfs_fuse_rw_prep(iocb, to);
 	if (rc)
 		return rc;
@@ -1087,6 +1091,7 @@ famfs_fuse_write_iter(struct kiocb *iocb, struct iov_iter *from)
 {
 	ssize_t rc;
 
+	pr_notice("%s:\n", __func__);
 	rc = famfs_fuse_rw_prep(iocb, from);
 	if (rc)
 		return rc;
