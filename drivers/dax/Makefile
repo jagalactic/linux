@@ -12,3 +12,5 @@ dax_pmem-y := pmem.o
 dax_cxl-y := cxl.o
 
 obj-y += hmem/
+
+ccflags-y += -DDEBUG
