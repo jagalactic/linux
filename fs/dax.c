@@ -1850,10 +1850,33 @@ static vm_fault_t dax_fault_iter(struct vm_fault *vmf,
 		return dax_fault_synchronous_pfnp(pfnp, pfn);
 
 	folio_ref_inc(folio);
-	if (pmd)
-		ret = vmf_insert_folio_pmd(vmf, pfn_folio(pfn), write);
-	else
+	if (pmd) {
+		/*
+		 * Choose insertion method based on folio order.
+		 *
+		 * Before the 6.15 folio conversion, DAX could handle PMD faults
+		 * regardless of underlying page/folio size. The conversion added
+		 * a strict check in vmf_insert_folio_pmd() requiring
+		 * folio_order == PMD_ORDER.
+		 *
+		 * We restore the old flexibility by using the PFN insertion path
+		 * when folio order doesn't match the fault size. This allows:
+		 * - 2M faults on 4K-aligned devdax (PFN path)
+		 * - 2M faults on 2M-aligned devdax (folio path, optimal)
+		 *
+		 * The PFN path works with any folio size because it bypasses the
+		 * folio_order check and uses raw PFN insertion.
+		 */
+		if (folio_order(folio) == PMD_ORDER) {
+			/* Optimal path: folio size matches fault size */
+			ret = vmf_insert_folio_pmd(vmf, folio, write);
+		} else {
+			/* Compatibility path: use PFN insertion for mismatched sizes */
+			ret = vmf_insert_pfn_pmd(vmf, pfn, write);
+		}
+	} else {
 		ret = vmf_insert_page_mkwrite(vmf, pfn_to_page(pfn), write);
+	}
 	folio_put(folio);
 
 	return ret;

@@ -1109,7 +1109,14 @@ famfs_fuse_mmap(struct file *file, struct vm_area_struct *vma)
 
 	file_accessed(file);
 	vma->vm_ops = &famfs_file_vm_ops;
-	vm_flags_set(vma, VM_HUGEPAGE);
+	/*
+	 * VM_HUGEPAGE: Request THP/huge page mappings
+	 * VM_MIXEDMAP: Allow mixed folio and PFN insertion
+	 *
+	 * VM_MIXEDMAP is required for vmf_insert_pfn_pmd() which we use
+	 * when the devdax folio size doesn't match the fault size.
+	 */
+	vm_flags_set(vma, VM_HUGEPAGE | VM_MIXEDMAP);
 	return 0;
 }
 
