@@ -395,6 +395,27 @@ static inline unsigned long dax_folio_put(struct folio *folio)
 	order = folio_order(folio);
 	if (!order)
 		return 0;
+
+	/*
+	 * Pre-initialized folios from devdax (vmemmap_shift > 0) should not
+	 * be reset to order-0. They were created as compound pages by
+	 * devm_memremap_pages() and should maintain their structure.
+	 *
+	 * Dynamically initialized folios (pmem or devdax with vmemmap_shift=0)
+	 * should be split back to order-0 for reuse.
+	 */
+	if (folio_is_zone_device(folio)) {
+		struct dev_pagemap *pgmap = page_pgmap(&folio->page);
+
+		if (pgmap && pgmap->vmemmap_shift > 0) {
+			/*
+			 * Pre-initialized compound folio - don't reset.
+			 * Just cleared the mapping above.
+			 */
+			return 0;
+		}
+	}
+
 	folio_reset_order(folio);
 
 	for (i = 0; i < (1UL << order); i++) {
