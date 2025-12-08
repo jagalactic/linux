@@ -424,17 +424,41 @@ static void dax_folio_init(void *entry)
 	int order = dax_entry_order(entry);
 
 	/*
-	 * Folio should have been split back to order-0 pages in
-	 * dax_folio_put() when they were removed from their
-	 * final mapping.
+	 * DevDAX with vmemmap_shift > 0 pre-initializes folios with
+	 * compound structure via devm_memremap_pages(). If the folio
+	 * already has the correct order, it's been pre-initialized and
+	 * we shouldn't call prep_compound_page() again.
+	 *
+	 * PMEM (and devdax with vmemmap_shift=0) have order-0 folios that
+	 * need prep_compound_page() to set up compound structure.
+	 *
+	 * Note: Both pmem and devdax are ZONE_DEVICE, so we can't distinguish
+	 * them by page type. The key is whether the folio already has the
+	 * correct compound structure (folio_order == target order).
 	 */
-	WARN_ON_ONCE(folio_order(folio));
+	if (folio_order(folio) == order && order > 0) {
+		/*
+		 * Folio already has correct compound structure.
+		 * This happens with devdax when vmemmap_shift > 0
+		 * (e.g., 2M alignment → vmemmap_shift=9 → order-9 folios).
+		 */
+		return;
+	}
+
+	/*
+	 * Folio needs initialization. It should currently be order-0.
+	 */
+	if (WARN_ON_ONCE(folio_order(folio) != 0)) {
+		trace_printk("%s: unexpected folio order: current=%d expected=0\n",
+			     __func__, folio_order(folio));
+	}
 
 	if (order > 0) {
 		prep_compound_page(&folio->page, order);
 		if (order > 1)
 			INIT_LIST_HEAD(&folio->_deferred_list);
-		WARN_ON_ONCE(folio_ref_count(folio));
+
+ 		WARN_ON_ONCE(folio_ref_count(folio));
 	}
 }
 
