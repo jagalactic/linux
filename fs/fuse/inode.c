@@ -168,8 +168,23 @@ static void fuse_evict_inode(struct inode *inode)
 	/* Will write inode on close/munmap and in all other dirtiers */
 	WARN_ON(inode->i_state & I_DIRTY_INODE);
 
-	if (FUSE_IS_VIRTIO_DAX(fi))
+	/*
+	 * Handle DAX entry cleanup based on device type.
+	 *
+	 * VIRTIO_DAX (PMEM): Folios are created dynamically during faults and
+	 * must be freed during eviction. Use dax_break_layout_final() which
+	 * waits for folios to become idle before deleting entries.
+	 *
+	 * Famfs (devdax): Folios are permanent and owned by the device. They
+	 * have a permanent refcount and will never become "idle". We must
+	 * still delete DAX entries from the mapping, but skip the wait loop.
+	 */
+	if (FUSE_IS_VIRTIO_DAX(fi)) {
 		dax_break_layout_final(inode);
+	} else if (dax_mapping(inode->i_mapping)) {
+		/* Famfs: Delete DAX entries without waiting for idle */
+		dax_delete_mapping_range(inode->i_mapping, 0, LLONG_MAX);
+	}
 
 	truncate_inode_pages_final(&inode->i_data);
 	clear_inode(inode);

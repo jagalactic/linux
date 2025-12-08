@@ -446,33 +446,29 @@ static void dax_folio_init(void *entry)
 
 	/*
 	 * DevDAX with vmemmap_shift > 0 pre-initializes folios with
-	 * compound structure via devm_memremap_pages(). If the folio
-	 * already has the correct order, it's been pre-initialized and
-	 * we shouldn't call prep_compound_page() again.
+	 * compound structure via devm_memremap_pages(). These folios
+	 * should never be re-initialized.
 	 *
 	 * PMEM (and devdax with vmemmap_shift=0) have order-0 folios that
 	 * need prep_compound_page() to set up compound structure.
 	 *
-	 * Note: Both pmem and devdax are ZONE_DEVICE, so we can't distinguish
-	 * them by page type. The key is whether the folio already has the
-	 * correct compound structure (folio_order == target order).
+	 * Note: A pre-initialized large folio can be used for smaller
+	 * mappings (e.g., order-9 folio for order-0 PTE fault). This is
+	 * valid and we should not attempt re-initialization.
 	 */
-	if (folio_order(folio) == order && order > 0) {
+	if (folio_order(folio) > 0) {
 		/*
-		 * Folio already has correct compound structure.
+		 * Folio is pre-initialized with compound structure.
 		 * This happens with devdax when vmemmap_shift > 0
 		 * (e.g., 2M alignment → vmemmap_shift=9 → order-9 folios).
+		 * Safe to use for any order <= folio_order.
 		 */
 		return;
 	}
 
 	/*
-	 * Folio needs initialization. It should currently be order-0.
+	 * Folio is order-0 and needs initialization to target order.
 	 */
-	if (WARN_ON_ONCE(folio_order(folio) != 0)) {
-		trace_printk("%s: unexpected folio order: current=%d expected=0\n",
-			     __func__, folio_order(folio));
-	}
 
 	if (order > 0) {
 		prep_compound_page(&folio->page, order);
@@ -1895,6 +1891,16 @@ static vm_fault_t dax_fault_iter(struct vm_fault *vmf,
 		return dax_fault_synchronous_pfnp(pfnp, pfn);
 
 	folio_ref_inc(folio);
+
+	/*
+	 * Mark folio as uptodate before insertion. For DAX, the folio
+	 * represents persistent memory that's always current. This is
+	 * needed for both insertion paths (folio and PFN) to prevent
+	 * warnings when marking pages dirty during unmap.
+	 */
+	if (!folio_test_uptodate(folio))
+		folio_mark_uptodate(folio);
+
 	if (pmd) {
 		/*
 		 * Choose insertion method based on folio order.
