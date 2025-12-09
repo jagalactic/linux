@@ -433,7 +433,13 @@ static inline unsigned long dax_folio_put(struct folio *folio)
 		 */
 		new_folio->pgmap = pgmap;
 		new_folio->share = 0;
-		WARN_ON_ONCE(folio_ref_count(new_folio));
+
+		/*
+		 * ZONE_DEVICE folios (devdax) have permanent device-held
+		 * refcount=1. Only warn if refcount is unexpected.
+		 */
+		int expected_refcount = folio_is_zone_device(new_folio) ? 1 : 0;
+		WARN_ON_ONCE(folio_ref_count(new_folio) != expected_refcount);
 	}
 
 	return ref;
@@ -471,11 +477,18 @@ static void dax_folio_init(void *entry)
 	 */
 
 	if (order > 0) {
+		int expected_refcount = folio_is_zone_device(folio) ? 1 : 0;
+
 		prep_compound_page(&folio->page, order);
 		if (order > 1)
 			INIT_LIST_HEAD(&folio->_deferred_list);
 
- 		WARN_ON_ONCE(folio_ref_count(folio));
+		/*
+		 * Check refcount after initialization. ZONE_DEVICE folios
+		 * (devdax) have a permanent device-held refcount=1. Non-
+		 * ZONE_DEVICE folios should have refcount=0 after prep.
+		 */
+		WARN_ON_ONCE(folio_ref_count(folio) != expected_refcount);
 	}
 }
 
@@ -498,7 +511,15 @@ static void dax_associate_entry(void *entry, struct address_space *mapping,
 		WARN_ON_ONCE(dax_entry_order(entry) != folio_order(folio));
 		folio->share++;
 	} else {
-		WARN_ON_ONCE(folio->mapping);
+		/*
+		 * For ZONE_DEVICE folios (devdax), the mapping might persist
+		 * from previous use since folios are permanent and reused.
+		 * Clear it before re-association.
+		 */
+		WARN_ON_ONCE(folio->mapping && !folio_is_zone_device(folio));
+		if (folio->mapping)
+			folio->mapping = NULL;
+
 		dax_folio_init(entry);
 		folio = dax_to_folio(entry);
 		folio->mapping = mapping;
