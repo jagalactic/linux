@@ -84,4 +84,22 @@ config DEV_DAX_IOMAP
        help
          Support iomap mapping of devdax devices (for FS-DAX file
          systems that reside on character /dev/dax devices)
+
+config DEV_DAX_FSDEV
+	tristate "FSDEV DAX: fs-dax compatible device driver"
+	depends on DEV_DAX
+	default DEV_DAX
+	help
+	  Support a device-dax driver mode that is compatible with fs-dax
+	  filesystems. Unlike the standard device-dax driver which
+	  pre-initializes compound folios based on device alignment, this
+	  driver leaves folios uninitialized (similar to pmem) allowing
+	  fs-dax to manage folio lifecycles dynamically.
+
+	  This driver uses MEMORY_DEVICE_FS_DAX type and does not set
+	  vmemmap_shift, making it compatible with filesystems like famfs
+	  that use the iomap-based fs-dax infrastructure.
+
+	  Say M if you plan to use fs-dax filesystems on /dev/dax devices.
+	  Say N if you only need raw character device access to DAX memory.
 endif
