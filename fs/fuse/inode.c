@@ -1346,7 +1346,7 @@ static void process_init_reply(struct fuse_mount *fm, struct fuse_args *args,
 			u64 flags = arg->flags;
 
 			if (flags & FUSE_INIT_EXT)
-				flags |= (u64) arg->flags2 << 32;
+				flags |= FIELD_PREP(GENMASK_ULL(63, 32), arg->flags2);
 
 			ra_pages = arg->max_readahead / PAGE_SIZE;
 			if (flags & FUSE_ASYNC_READ)
