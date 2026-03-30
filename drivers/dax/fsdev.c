@@ -45,15 +45,14 @@ static void fsdev_write_dax(void *addr, struct page *page,
 }
 
 static long __fsdev_dax_direct_access(struct dax_device *dax_dev, pgoff_t pgoff,
-			long nr_pages, enum dax_access_mode mode, void **kaddr,
-			unsigned long *pfn)
+		long nr_pages, enum dax_access_mode mode, void **kaddr,
+		unsigned long *pfn)
 {
 	struct dev_dax *dev_dax = dax_get_private(dax_dev);
 	size_t size = nr_pages << PAGE_SHIFT;
 	size_t offset = pgoff << PAGE_SHIFT;
 	void *virt_addr = dev_dax->virt_addr + offset;
 	phys_addr_t phys;
-	unsigned long local_pfn;
 
 	phys = dax_pgoff_to_phys(dev_dax, pgoff, size);
 	if (phys == -1) {
@@ -65,9 +64,8 @@ static long __fsdev_dax_direct_access(struct dax_device *dax_dev, pgoff_t pgoff,
 	if (kaddr)
 		*kaddr = virt_addr;
 
-	local_pfn = PHYS_PFN(phys);
 	if (pfn)
-		*pfn = local_pfn;
+		*pfn = PHYS_PFN(phys);
 
 	/*
 	 * Use cached_size which was computed at probe time. The size cannot
@@ -77,7 +75,7 @@ static long __fsdev_dax_direct_access(struct dax_device *dax_dev, pgoff_t pgoff,
 }
 
 static int fsdev_dax_zero_page_range(struct dax_device *dax_dev,
-			pgoff_t pgoff, size_t nr_pages)
+		pgoff_t pgoff, size_t nr_pages)
 {
 	void *kaddr;
 	long rc;
@@ -91,8 +89,8 @@ static int fsdev_dax_zero_page_range(struct dax_device *dax_dev,
 }
 
 static long fsdev_dax_direct_access(struct dax_device *dax_dev,
-		  pgoff_t pgoff, long nr_pages, enum dax_access_mode mode,
-		  void **kaddr, unsigned long *pfn)
+		pgoff_t pgoff, long nr_pages, enum dax_access_mode mode,
+		void **kaddr, unsigned long *pfn)
 {
 	return __fsdev_dax_direct_access(dax_dev, pgoff, nr_pages, mode,
 					 kaddr, pfn);
