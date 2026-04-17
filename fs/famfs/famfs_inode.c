@@ -124,8 +124,7 @@ famfs_mknod(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry,
 	if (!inode)
 		return -ENOSPC;
 
-	d_instantiate(dentry, inode);
-	dget(dentry);	/* Extra count - pin the dentry in core */
+	d_make_persistent(dentry, inode);
 	tv = inode_set_ctime_current(inode);
 	inode_set_mtime_to_ts(inode, tv);
 	inode_set_atime_to_ts(inode, tv);

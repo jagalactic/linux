@@ -1,0 +1,41 @@
+{
+  "version": "1.0",
+  "bug_confirmed": true,
+
+  "bug_summary": "famfs_mknod() pins dentries using bare dget() without setting DCACHE_PERSISTENT. The VFS unmount path (select_collect_umount) only releases dentry pins for entries marked DCACHE_PERSISTENT, so every famfs file dentry retains refcount=1 at umount_check time, triggering 'BUG: Dentry still in use' warnings. Fix: replace d_instantiate()+dget() with d_make_persistent(), which sets DCACHE_PERSISTENT and bumps the refcount atomically.",
+
+  "root_cause": {
+    "description": "famfs_mknod() at fs/famfs/famfs_inode.c calls d_instantiate(dentry, inode) followed by dget(dentry) to pin the dentry in the dcache. However, the VFS unmount helper select_collect_umount() (fs/dcache.c:1548) only drops the extra pin for dentries that have DCACHE_PERSISTENT set in d_flags. Since the bare dget() call does not set DCACHE_PERSISTENT, the pin is invisible to the unmount path and is never released. The correct API is d_make_persistent() which sets DCACHE_PERSISTENT and bumps the refcount atomically. A secondary bug also exists: famfs_kill_sb frees sb->s_fs_info before calling kill_char_super(), which runs evict_inodes() and show_options() callbacks that may access s_fs_info.",
+    "category": "missing_api",
+    "affected_subsystem": "fs/famfs",
+    "interacting_subsystem": "fs/dcache.c (select_collect_umount / DCACHE_PERSISTENT)"
+  },
+
+  "race_timeline": [],
+
+  "affected_functions": [
+    { "name": "famfs_mknod", "file": "fs/famfs/famfs_inode.c", "role": "Uses bare dget() without DCACHE_PERSISTENT — the primary bug site" },
+    { "name": "select_collect_umount", "file": "fs/dcache.c", "role": "Only releases dentry pins marked DCACHE_PERSISTENT; ignores bare dget() pins" },
+    { "name": "d_make_persistent", "file": "fs/dcache.c", "role": "Correct replacement API: instantiates dentry, sets DCACHE_PERSISTENT, bumps refcount" },
+    { "name": "famfs_kill_sb", "file": "fs/famfs/famfs_inode.c", "role": "Secondary bug: frees s_fs_info before kill_char_super runs evict_inodes" }
+  ],
+
+  "suspect_commit": null,
+
+  "related_commits": [],
+
+  "evidence": [
+    { "type": "code", "description": "famfs_mknod bare dget()", "detail": "fs/famfs/famfs_inode.c:128 — d_instantiate(dentry, inode); dget(dentry);" },
+    { "type": "code", "description": "select_collect_umount DCACHE_PERSISTENT check", "detail": "fs/dcache.c:1550 — if (dentry->d_flags & DCACHE_PERSISTENT) { dentry->d_flags &= ~DCACHE_PERSISTENT; dentry->d_lockref.count--; }" },
+    { "type": "code", "description": "d_make_persistent sets DCACHE_PERSISTENT", "detail": "fs/dcache.c:2796-2811 — sets DCACHE_PERSISTENT flag and calls dget_dlock() atomically" },
+    { "type": "code", "description": "famfs_kill_sb frees s_fs_info too early", "detail": "fs/famfs/famfs_inode.c:489-492 — kfree(fsi); sb->s_fs_info = NULL; kill_char_super(sb);" }
+  ],
+
+  "fix_suggestion": "PRIMARY: In famfs_mknod(), replace 'd_instantiate(dentry, inode); dget(dentry);' with 'd_make_persistent(dentry, inode);'. SECONDARY: In famfs_kill_sb(), move kill_char_super(sb) to BEFORE the kfree(fsi)/s_fs_info=NULL cleanup, so that evict_inodes() and other super callbacks can still access s_fs_info during teardown.",
+
+  "theories_investigated": [
+    { "id": "T1", "title": "famfs_kill_sb holds dax reference that pins dentries", "status": "eliminated", "reason": "DAX released before kill_char_super; DAX holder ops hold no dentry refs" },
+    { "id": "T2", "title": "famfs_mknod bare dget() without DCACHE_PERSISTENT", "status": "confirmed", "reason": "select_collect_umount requires DCACHE_PERSISTENT to release pin; bare dget() never sets it" },
+    { "id": "T3", "title": "famfs metadata inode/dentry not released before shrink_dcache", "status": "eliminated", "reason": "famfs_fs_info holds no dentry or inode references" }
+  ]
+}

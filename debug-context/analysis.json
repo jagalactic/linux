@@ -1,10 +1,18 @@
 {
   "version": "1.0",
-  "total_dispatches": 0,
+  "total_dispatches": 2,
 
   "context_loaded": {
-    "functions": [],
-    "types": [],
+    "functions": [
+      { "name": "famfs_kill_sb", "file": "fs/famfs/famfs_inode.c", "loaded_by": "agent-0", "summary": "Frees fsi and NULLs s_fs_info BEFORE calling kill_char_super — secondary bug" },
+      { "name": "famfs_mknod", "file": "fs/famfs/famfs_inode.c", "loaded_by": "agent-0", "summary": "Uses d_instantiate+dget without DCACHE_PERSISTENT — primary bug" },
+      { "name": "select_collect_umount", "file": "fs/dcache.c", "loaded_by": "agent-0", "summary": "Only drops dentry pin for DCACHE_PERSISTENT dentries; bare dget pins are invisible to it" },
+      { "name": "d_make_persistent", "file": "fs/dcache.c", "loaded_by": "agent-0", "summary": "Correct replacement: instantiates dentry, sets DCACHE_PERSISTENT, bumps refcount atomically" },
+      { "name": "famfs_dax_notify_failure", "file": "fs/famfs/famfs_inode.c", "loaded_by": "agent-0", "summary": "Holds no dentry references; T1 eliminated" }
+    ],
+    "types": [
+      { "name": "famfs_fs_info", "file": "fs/famfs/famfs_internal.h", "loaded_by": "agent-0" }
+    ],
     "subsystem_guides": [],
     "commits_examined": []
   },
@@ -12,68 +20,62 @@
   "theories": [
     {
       "id": "T1",
-      "status": "active",
+      "status": "eliminated",
       "priority": "high",
-      "title": "famfs_kill_sb holds dax device reference that pins dentries open",
-      "description": "famfs_kill_sb calls fs_put_dax() or similar DAX teardown AFTER kill_char_super()/generic_shutdown_super(). If the dax device reference or holder is released after shrink_dcache_for_umount runs, something in the DAX/holder path may hold dentry references that prevent cleanup.",
-      "evidence_for": [
-        "famfs_kill_sb is in the call trace just after kill_char_super",
-        "famfs uses a dax device (fsdev_dax module loaded)",
-        "Multiple dentries are affected, suggesting a systematic reference leak not a one-off"
+      "title": "famfs_kill_sb holds dax reference that pins dentries",
+      "description": "DAX device reference released before kill_char_super, not after. DAX holder ops hold no dentry references.",
+      "evidence_for": [],
+      "evidence_against": [
+        "fs_put_dax() is called BEFORE kill_char_super() in famfs_kill_sb",
+        "famfs_dax_notify_failure() holds no dentry/inode references"
       ],
-      "evidence_against": [],
-      "elimination_reason": null,
-      "investigated_by": [],
-      "related_functions": ["famfs_kill_sb", "fs_put_dax", "kill_char_super"],
+      "elimination_reason": "DAX ordering is correct; DAX path holds no dentry references",
+      "investigated_by": ["agent-0"],
+      "related_functions": ["famfs_kill_sb", "famfs_dax_notify_failure"],
       "related_commits": [],
-      "suggested_next_steps": [
-        "Read famfs_kill_sb: does it release the dax device before or after kill_char_super?",
-        "Check if fs_dax_get/fs_put_dax or dax holder ops hold dentry references"
-      ]
+      "suggested_next_steps": []
     },
     {
       "id": "T2",
-      "status": "active",
+      "status": "confirmed",
       "priority": "high",
-      "title": "famfs inode or file objects hold dentry references past unmount",
-      "description": "famfs may store dentry or file references in per-inode private data (famfs_file_meta or famfs_fs_info). If these are not released before generic_shutdown_super() calls shrink_dcache_for_umount(), dentries will still have nonzero refcounts.",
+      "title": "famfs_mknod bare dget() without DCACHE_PERSISTENT leaks dentry refcount at unmount",
+      "description": "famfs_mknod calls d_instantiate()+dget() to pin dentries. select_collect_umount() only drops pins for dentries with DCACHE_PERSISTENT set. Since bare dget() never sets DCACHE_PERSISTENT, every famfs file dentry has refcount=1 at umount_check time.",
       "evidence_for": [
-        "Dentry refcount is exactly 1 — consistent with one unreleased reference in famfs private data",
-        "Multiple files affected — suggests a per-file reference stored systematically",
-        "famfs_evict_inode frees i_private; if called too late, dentry refs may linger"
+        "famfs_mknod line 128: dget(dentry) without DCACHE_PERSISTENT",
+        "select_collect_umount (dcache.c:1550): only decrements count if DCACHE_PERSISTENT set",
+        "d_make_persistent (dcache.c:2796): the correct API — sets DCACHE_PERSISTENT + dget atomically",
+        "Every famfs file dentry shows refcount=1 at unmount — matches per-file pin pattern"
       ],
       "evidence_against": [],
       "elimination_reason": null,
-      "investigated_by": [],
-      "related_functions": ["famfs_evict_inode", "famfs_kill_sb", "famfs_fill_super", "famfs_get_inode"],
+      "investigated_by": ["agent-0"],
+      "related_functions": ["famfs_mknod", "select_collect_umount", "d_make_persistent"],
       "related_commits": [],
-      "suggested_next_steps": [
-        "Read famfs_evict_inode: does it drop any dentry references?",
-        "Read famfs_file_meta / famfs_fs_info: do they store dentry or file pointers?",
-        "Check famfs_fill_super for any stored dentries or file references"
-      ]
+      "suggested_next_steps": []
     },
     {
       "id": "T3",
-      "status": "active",
+      "status": "eliminated",
       "priority": "medium",
-      "title": "famfs superblock metadata inode/dentry not released before shrink_dcache",
-      "description": "famfs may create special inodes at mount time (e.g., a .log or metadata inode) and store a dentry for them in famfs_fs_info. If kill_sb doesn't drop these before generic_shutdown_super, shrink_dcache_for_umount finds them still referenced.",
-      "evidence_for": [
-        "famfs has a log/superblock file concept in the standalone design",
-        "The dentry name 'pcq_lib.c' looks like a regular famfs file, but the pattern of multiple dentries affected is consistent with all files having a pinned reference"
+      "title": "famfs metadata inode/dentry not released before shrink_dcache",
+      "description": "famfs_fs_info contains no dentry, file, or inode pointer fields.",
+      "evidence_for": [],
+      "evidence_against": [
+        "famfs_fs_info fields: mount_opts, dax_devp, rootdev (char*), daxdevno, deverror — no dentry/inode pointers"
       ],
-      "evidence_against": [],
-      "elimination_reason": null,
-      "investigated_by": [],
-      "related_functions": ["famfs_kill_sb", "famfs_fill_super", "famfs_fs_info"],
+      "elimination_reason": "famfs_fs_info holds no dentry or inode references",
+      "investigated_by": ["agent-0"],
+      "related_functions": [],
       "related_commits": [],
-      "suggested_next_steps": [
-        "Read famfs_fs_info structure for any dentry/file/inode pointer fields",
-        "Read famfs_kill_sb for dentry drops before kill_char_super"
-      ]
+      "suggested_next_steps": []
     }
   ],
 
-  "confirmed_bug": null
+  "confirmed_bug": {
+    "theory_id": "T2",
+    "summary": "famfs_mknod uses bare dget() to pin dentries without setting DCACHE_PERSISTENT; select_collect_umount cannot release the pin at unmount",
+    "category": "missing_api",
+    "suspect_commit": null
+  }
 }

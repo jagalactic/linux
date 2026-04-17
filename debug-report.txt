@@ -1,0 +1,79 @@
+BUG: Dentry still in use at unmount of famfs
+============================================
+
+Kernel: 7.0.0-rc6-famfs_standalone+
+File:   fs/famfs/famfs_inode.c
+
+ROOT CAUSE
+----------
+
+famfs_mknod() pins dentries using a bare dget() call:
+
+    d_instantiate(dentry, inode);
+    dget(dentry);   /* Extra count - pin the dentry in core */
+
+The VFS unmount helper select_collect_umount() (fs/dcache.c:1548) only
+releases dentry pins for entries that have DCACHE_PERSISTENT set:
+
+    static enum d_walk_ret select_collect_umount(void *_data,
+                                                 struct dentry *dentry)
+    {
+        if (dentry->d_flags & DCACHE_PERSISTENT) {
+            dentry->d_flags &= ~DCACHE_PERSISTENT;
+            dentry->d_lockref.count--;
+        }
+        return select_collect(_data, dentry);
+    }
+
+Since bare dget() does not set DCACHE_PERSISTENT, the pin is invisible
+to the unmount path and is never released.  Every famfs file dentry
+retains refcount=1 when umount_check() runs, triggering:
+
+    BUG: Dentry 000000006ac987d3{i=3f41,n=pcq_lib.c} still in use (1)
+    [unmount of famfs famfs]
+
+PRIMARY FIX (already applied)
+------------------------------
+
+Replace d_instantiate()+dget() with d_make_persistent(), which sets
+DCACHE_PERSISTENT and bumps the refcount atomically:
+
+-   d_instantiate(dentry, inode);
+-   dget(dentry);   /* Extra count - pin the dentry in core */
++   d_make_persistent(dentry, inode);
+
+select_collect_umount() then sees DCACHE_PERSISTENT, clears the flag,
+and decrements the refcount, allowing the dentry to be freed cleanly.
+
+SECONDARY BUG (not yet fixed)
+------------------------------
+
+famfs_kill_sb() frees sb->s_fs_info before calling kill_char_super():
+
+    kfree(fsi);
+    sb->s_fs_info = NULL;
+    kill_char_super(sb);   /* runs evict_inodes, show_options, ... */
+
+kill_char_super() calls generic_shutdown_super() which invokes
+evict_inodes() and may invoke famfs_show_options(), both of which
+dereference sb->s_fs_info.  Freeing it first is a use-after-free.
+
+Fix: move kill_char_super(sb) to before the s_fs_info cleanup:
+
+    kill_char_super(sb);
+    kfree(fsi->rootdev);
+    kfree(fsi);
+    sb->s_fs_info = NULL;
+
+CALL TRACE (from bug report)
+-----------------------------
+
+    umount_check+0x50/0x70         <- WARNING fires here
+    d_walk+0xb7/0x290
+    shrink_dcache_for_umount+0x51/0x1a0
+    generic_shutdown_super+0x2b/0x110
+    kill_char_super+0x12/0x30
+    famfs_kill_sb+0x56/0x60 [famfsv1]
+    deactivate_locked_super+0x35/0xb0
+    deactivate_super+0x43/0x50
+    cleanup_mnt+0xe1/0x150
