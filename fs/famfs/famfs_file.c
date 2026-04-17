@@ -839,7 +839,7 @@ __famfs_filemap_fault(struct vm_fault *vmf, unsigned int pe_size,
 	struct super_block *sb = inode->i_sb;
 	struct famfs_fs_info *fsi = sb->s_fs_info;
 	vm_fault_t ret;
-	pfn_t pfn;
+	unsigned long pfn;
 
 	if (fsi->deverror)
 		return VM_FAULT_SIGBUS;
