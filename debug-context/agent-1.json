@@ -1,0 +1,45 @@
+{
+  "agent_id": "agent-1",
+  "agent_type": "code",
+  "theory_id": "T2",
+
+  "task_description": "Determine whether famfs stores per-file or per-inode dentry/file references that are not released before generic_shutdown_super() calls shrink_dcache_for_umount(). The dentry refcount is exactly 1 for each affected file, suggesting a systematic per-file reference.",
+
+  "instructions": [
+    "Read fs/famfs/famfs_inode.c: find and read famfs_fill_super in full - look for any stored dentry or file references in famfs_fs_info",
+    "Read fs/famfs/famfs_inode.c: find and read famfs_get_inode - does it bump a dentry refcount or store a reference anywhere?",
+    "Read fs/famfs/famfs_inode.c: find and read famfs_evict_inode - does it drop any dentry references?",
+    "Read fs/famfs/famfs_file.c: look for any open files, dentry references, or file structs stored in famfs_file_meta or per-inode private data",
+    "Check if famfs creates any 'internal' file opens (filp_open, dentry_open) at mount time or file creation time that would hold dentry references",
+    "Look for any use of dget(), igrab(), ihold(), or similar reference-bumping calls in famfs code that are not paired with dput()/iput() before unmount",
+    "Verify: can dentry refcount=1 be explained by a missing dput() or iput() somewhere in the famfs teardown path?"
+  ],
+
+  "functions_to_load": ["famfs_fill_super", "famfs_get_inode", "famfs_evict_inode"],
+  "types_to_load": ["famfs_file_meta", "famfs_fs_info"],
+  "subsystem_guides_to_load": [],
+
+  "context_from_bug": {
+    "crash_function": "umount_check",
+    "crash_file": "fs/dcache.c:1640",
+    "call_trace_summary": [
+      "umount_check (WARNING: dentry still in use refcount=1)",
+      "d_walk",
+      "shrink_dcache_for_umount",
+      "generic_shutdown_super",
+      "kill_char_super",
+      "famfs_kill_sb",
+      "deactivate_locked_super"
+    ],
+    "reproducer_summary": "manual mount then unmount of famfs; multiple file dentries still in use with refcount=1 at unmount time"
+  },
+
+  "context_from_prior_agents": [],
+
+  "questions_to_answer": [
+    "Does famfs_fill_super store any dentry or file references in famfs_fs_info that are not dropped before unmount?",
+    "Does famfs use dget()/ihold() anywhere that is not paired with a dput()/iput() before shrink_dcache_for_umount runs?",
+    "Does famfs_evict_inode drop all references held by inode private data?",
+    "Are there any filp_open() or dentry_open() calls in famfs that create long-lived file references?"
+  ]
+}

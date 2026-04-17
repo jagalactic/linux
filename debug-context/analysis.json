@@ -1,0 +1,79 @@
+{
+  "version": "1.0",
+  "total_dispatches": 0,
+
+  "context_loaded": {
+    "functions": [],
+    "types": [],
+    "subsystem_guides": [],
+    "commits_examined": []
+  },
+
+  "theories": [
+    {
+      "id": "T1",
+      "status": "active",
+      "priority": "high",
+      "title": "famfs_kill_sb holds dax device reference that pins dentries open",
+      "description": "famfs_kill_sb calls fs_put_dax() or similar DAX teardown AFTER kill_char_super()/generic_shutdown_super(). If the dax device reference or holder is released after shrink_dcache_for_umount runs, something in the DAX/holder path may hold dentry references that prevent cleanup.",
+      "evidence_for": [
+        "famfs_kill_sb is in the call trace just after kill_char_super",
+        "famfs uses a dax device (fsdev_dax module loaded)",
+        "Multiple dentries are affected, suggesting a systematic reference leak not a one-off"
+      ],
+      "evidence_against": [],
+      "elimination_reason": null,
+      "investigated_by": [],
+      "related_functions": ["famfs_kill_sb", "fs_put_dax", "kill_char_super"],
+      "related_commits": [],
+      "suggested_next_steps": [
+        "Read famfs_kill_sb: does it release the dax device before or after kill_char_super?",
+        "Check if fs_dax_get/fs_put_dax or dax holder ops hold dentry references"
+      ]
+    },
+    {
+      "id": "T2",
+      "status": "active",
+      "priority": "high",
+      "title": "famfs inode or file objects hold dentry references past unmount",
+      "description": "famfs may store dentry or file references in per-inode private data (famfs_file_meta or famfs_fs_info). If these are not released before generic_shutdown_super() calls shrink_dcache_for_umount(), dentries will still have nonzero refcounts.",
+      "evidence_for": [
+        "Dentry refcount is exactly 1 — consistent with one unreleased reference in famfs private data",
+        "Multiple files affected — suggests a per-file reference stored systematically",
+        "famfs_evict_inode frees i_private; if called too late, dentry refs may linger"
+      ],
+      "evidence_against": [],
+      "elimination_reason": null,
+      "investigated_by": [],
+      "related_functions": ["famfs_evict_inode", "famfs_kill_sb", "famfs_fill_super", "famfs_get_inode"],
+      "related_commits": [],
+      "suggested_next_steps": [
+        "Read famfs_evict_inode: does it drop any dentry references?",
+        "Read famfs_file_meta / famfs_fs_info: do they store dentry or file pointers?",
+        "Check famfs_fill_super for any stored dentries or file references"
+      ]
+    },
+    {
+      "id": "T3",
+      "status": "active",
+      "priority": "medium",
+      "title": "famfs superblock metadata inode/dentry not released before shrink_dcache",
+      "description": "famfs may create special inodes at mount time (e.g., a .log or metadata inode) and store a dentry for them in famfs_fs_info. If kill_sb doesn't drop these before generic_shutdown_super, shrink_dcache_for_umount finds them still referenced.",
+      "evidence_for": [
+        "famfs has a log/superblock file concept in the standalone design",
+        "The dentry name 'pcq_lib.c' looks like a regular famfs file, but the pattern of multiple dentries affected is consistent with all files having a pinned reference"
+      ],
+      "evidence_against": [],
+      "elimination_reason": null,
+      "investigated_by": [],
+      "related_functions": ["famfs_kill_sb", "famfs_fill_super", "famfs_fs_info"],
+      "related_commits": [],
+      "suggested_next_steps": [
+        "Read famfs_fs_info structure for any dentry/file/inode pointer fields",
+        "Read famfs_kill_sb for dentry drops before kill_char_super"
+      ]
+    }
+  ],
+
+  "confirmed_bug": null
+}

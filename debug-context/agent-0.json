@@ -1,0 +1,43 @@
+{
+  "agent_id": "agent-0",
+  "agent_type": "code",
+  "theory_id": "T1",
+
+  "task_description": "Determine whether famfs_kill_sb releases the DAX device reference before or after kill_char_super() runs shrink_dcache_for_umount(), and whether anything in the DAX holder/teardown path holds dentry references.",
+
+  "instructions": [
+    "Read fs/famfs/famfs_inode.c: find and read famfs_kill_sb in full",
+    "Determine the order of operations: does famfs_kill_sb call kill_char_super() before or after releasing the dax device (fs_put_dax, dax_dev_put, etc.)?",
+    "Read fs/famfs/famfs_inode.c: find famfs_dax_notify_failure and the dax_holder_ops struct - do these hold dentry or file references?",
+    "Read the famfs_fs_info structure definition - does it contain dentry, file, or inode pointer fields?",
+    "Check whether kill_char_super -> generic_shutdown_super -> shrink_dcache_for_umount runs BEFORE famfs_kill_sb releases dax references",
+    "Verify false positives: confirm the dentry refcount of 1 cannot be explained by normal VFS behavior at this point in teardown"
+  ],
+
+  "functions_to_load": ["famfs_kill_sb", "famfs_dax_notify_failure"],
+  "types_to_load": ["famfs_fs_info"],
+  "subsystem_guides_to_load": [],
+
+  "context_from_bug": {
+    "crash_function": "umount_check",
+    "crash_file": "fs/dcache.c:1640",
+    "call_trace_summary": [
+      "umount_check (WARNING: dentry still in use refcount=1)",
+      "d_walk",
+      "shrink_dcache_for_umount",
+      "generic_shutdown_super",
+      "kill_char_super",
+      "famfs_kill_sb",
+      "deactivate_locked_super"
+    ],
+    "reproducer_summary": "manual mount then unmount of famfs filesystem; multiple dentries still in use at unmount"
+  },
+
+  "context_from_prior_agents": [],
+
+  "questions_to_answer": [
+    "Does famfs_kill_sb call kill_char_super() before releasing the dax device reference?",
+    "Does the dax holder teardown path (famfs_dax_notify_failure or similar) hold any dentry references?",
+    "Does famfs_fs_info contain any dentry, file, or inode pointer fields that are not dropped before kill_char_super?"
+  ]
+}
