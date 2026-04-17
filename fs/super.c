@@ -1297,8 +1297,6 @@ EXPORT_SYMBOL(kill_anon_super);
 
 void kill_char_super(struct super_block *sb)
 {
-	if (sb->s_root)
-		d_genocide(sb->s_root);
 	generic_shutdown_super(sb);
 	kill_super_notify(sb);
 }
