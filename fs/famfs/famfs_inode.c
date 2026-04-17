@@ -137,22 +137,22 @@ famfs_mknod(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry,
  * mkdir is allowed because the cli/lib need it. We could use a way to
  * prevent this *unless* the caller is the cli/lib.
  */
-static int famfs_mkdir(struct mnt_idmap *idmap, struct inode *dir,
-		       struct dentry *dentry, umode_t mode)
+static struct dentry *famfs_mkdir(struct mnt_idmap *idmap, struct inode *dir,
+				  struct dentry *dentry, umode_t mode)
 {
 	struct famfs_fs_info *fsi = dir->i_sb->s_fs_info;
 	int rc;
 
 	if (fsi->deverror)
-		return -ENODEV;
+		return ERR_PTR(-ENODEV);
 
 	rc = famfs_mknod(&nop_mnt_idmap, dir, dentry, mode | S_IFDIR, 0);
 	if (rc)
-		return rc;
+		return ERR_PTR(rc);
 
 	inc_nlink(dir);
 
-	return 0;
+	return ERR_PTR(0);
 }
 
 static int famfs_create(struct mnt_idmap *idmap, struct inode *dir,
@@ -245,7 +245,7 @@ static void famfs_evict_inode(struct inode *inode)
 
 static const struct super_operations famfs_super_ops = {
 	.statfs		= simple_statfs,
-	.drop_inode	= generic_delete_inode,
+	.drop_inode	= inode_just_drop,
 	.show_options	= famfs_show_options,
 	.evict_inode    = famfs_evict_inode,
 };
