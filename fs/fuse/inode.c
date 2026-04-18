@@ -121,8 +121,8 @@ static struct inode *fuse_alloc_inode(struct super_block *sb)
 	if (IS_ENABLED(CONFIG_FUSE_PASSTHROUGH))
 		fuse_inode_backing_set(fi, NULL);
 
-	if (IS_ENABLED(CONFIG_FUSE_FAMFS_DAX))
-		famfs_meta_set(fi, NULL);
+	if (IS_ENABLED(CONFIG_FUSE_DAX_FMAP))
+		fuse_dax_fmap_meta_set(fi, NULL);
 
 	return &fi->inode;
 
@@ -145,8 +145,8 @@ static void fuse_free_inode(struct inode *inode)
 	if (IS_ENABLED(CONFIG_FUSE_PASSTHROUGH))
 		fuse_backing_put(fuse_inode_backing(fi));
 
-	if (S_ISREG(inode->i_mode) && fuse_file_famfs(fi))
-		famfs_meta_free(fi);
+	if (S_ISREG(inode->i_mode) && fuse_file_dax_fmap(fi))
+		fuse_dax_fmap_meta_free(fi);
 
 	kmem_cache_free(fuse_inode_cachep, fi);
 }
@@ -169,7 +169,7 @@ static void fuse_evict_inode(struct inode *inode)
 	/* Will write inode on close/munmap and in all other dirtiers */
 	WARN_ON(inode_state_read_once(inode) & I_DIRTY_INODE);
 
-	if (FUSE_IS_VIRTIO_DAX(fi) || fuse_file_famfs(fi))
+	if (FUSE_IS_VIRTIO_DAX(fi) || fuse_file_dax_fmap(fi))
 		dax_break_layout_final(inode);
 
 	truncate_inode_pages_final(&inode->i_data);
@@ -1048,8 +1048,8 @@ void fuse_conn_put(struct fuse_conn *fc)
 		WARN_ON(atomic_read(&bucket->count) != 1);
 		kfree(bucket);
 	}
-	if (IS_ENABLED(CONFIG_FUSE_FAMFS_DAX))
-		famfs_teardown(fc);
+	if (IS_ENABLED(CONFIG_FUSE_DAX_FMAP))
+		fuse_dax_fmap_teardown(fc);
 
 	if (IS_ENABLED(CONFIG_FUSE_PASSTHROUGH))
 		fuse_backing_files_free(fc);
@@ -1467,9 +1467,9 @@ static void process_init_reply(struct fuse_mount *fm, struct fuse_args *args,
 			if (flags & FUSE_REQUEST_TIMEOUT)
 				timeout = arg->request_timeout;
 
-			if (IS_ENABLED(CONFIG_FUSE_FAMFS_DAX) &&
+			if (IS_ENABLED(CONFIG_FUSE_DAX_FMAP) &&
 			    flags & FUSE_DAX_FMAP) {
-				/* famfs_iomap is only allowed if the fuse
+				/* dax_fmap is only allowed if the fuse
 				 * server has CAP_SYS_RAWIO. This was checked
 				 * in fuse_send_init, and FUSE_DAX_IOMAP was
 				 * set in in_flags if so. Only allow enablement
@@ -1481,8 +1481,8 @@ static void process_init_reply(struct fuse_mount *fm, struct fuse_args *args,
 						| ia->in.flags;
 
 				if (in_flags & FUSE_DAX_FMAP) {
-					famfs_init_devlist_sem(fc);
-					fc->famfs_iomap = 1;
+					fuse_dax_init_devlist_sem(fc);
+					fc->dax_fmap = 1;
 				}
 			}
 		} else {
@@ -1546,7 +1546,7 @@ static struct fuse_init_args *fuse_new_init(struct fuse_mount *fm)
 		flags |= FUSE_SUBMOUNTS;
 	if (IS_ENABLED(CONFIG_FUSE_PASSTHROUGH))
 		flags |= FUSE_PASSTHROUGH;
-	if (IS_ENABLED(CONFIG_FUSE_FAMFS_DAX) && capable(CAP_SYS_RAWIO))
+	if (IS_ENABLED(CONFIG_FUSE_DAX_FMAP) && capable(CAP_SYS_RAWIO))
 		flags |= FUSE_DAX_FMAP;
 
 	/*

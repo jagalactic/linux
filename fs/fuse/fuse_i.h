@@ -224,12 +224,12 @@ struct fuse_inode {
 	 */
 	u8 cached_i_blkbits;
 
-#if IS_ENABLED(CONFIG_FUSE_FAMFS_DAX)
-	/* Pointer to the file's famfs metadata. Primary content is the
+#if IS_ENABLED(CONFIG_FUSE_DAX_FMAP)
+	/* Pointer to the file's DAX fmap metadata. Primary content is the
 	 * in-memory version of the fmap - the map from file's offset range
 	 * to DAX memory
 	 */
-	void *famfs_meta;
+	void *dax_fmap_meta;
 #endif
 };
 
@@ -929,8 +929,8 @@ struct fuse_conn {
 	/* Is synchronous FUSE_INIT allowed? */
 	unsigned int sync_init:1;
 
-	/* dev_dax_iomap support for famfs */
-	unsigned int famfs_iomap:1;
+	/* dev_dax_iomap support for FUSE DAX fmap */
+	unsigned int dax_fmap:1;
 
 	/* Use io_uring for communication */
 	unsigned int io_uring;
@@ -1007,8 +1007,8 @@ struct fuse_conn {
 		unsigned int req_timeout;
 	} timeout;
 
-#if IS_ENABLED(CONFIG_FUSE_FAMFS_DAX)
-	struct rw_semaphore famfs_devlist_sem;
+#if IS_ENABLED(CONFIG_FUSE_DAX_FMAP)
+	struct rw_semaphore dax_devlist_sem;
 	struct fuse_dax_devlist *dax_devlist;
 #endif
 };
@@ -1524,11 +1524,11 @@ void fuse_free_conn(struct fuse_conn *fc);
 
 /* dax.c */
 
-static inline int fuse_file_famfs(struct fuse_inode *fi); /* forward */
+static inline int fuse_file_dax_fmap(struct fuse_inode *fi); /* forward */
 
 #define FUSE_IS_VIRTIO_DAX(fuse_inode) (IS_ENABLED(CONFIG_FUSE_DAX)	\
 					&& IS_DAX(&(fuse_inode)->inode)  \
-					&& !fuse_file_famfs(fuse_inode))
+					&& !fuse_file_dax_fmap(fuse_inode))
 
 ssize_t fuse_dax_read_iter(struct kiocb *iocb, struct iov_iter *to);
 ssize_t fuse_dax_write_iter(struct kiocb *iocb, struct iov_iter *from);
@@ -1644,98 +1644,98 @@ extern void fuse_sysctl_unregister(void);
 #define fuse_sysctl_unregister()	do { } while (0)
 #endif /* CONFIG_SYSCTL */
 
-/* famfs.c */
+/* fuse_dax_fmap.c */
 
-#if IS_ENABLED(CONFIG_FUSE_FAMFS_DAX)
-int famfs_file_init_dax(struct fuse_mount *fm,
+#if IS_ENABLED(CONFIG_FUSE_DAX_FMAP)
+int fuse_dax_fmap_file_init(struct fuse_mount *fm,
 			struct inode *inode, void *fmap_buf,
 			size_t fmap_size);
-ssize_t famfs_fuse_write_iter(struct kiocb *iocb, struct iov_iter *from);
-ssize_t famfs_fuse_read_iter(struct kiocb *iocb, struct iov_iter	*to);
-int famfs_fuse_mmap(struct file *file, struct vm_area_struct *vma);
-void __famfs_meta_free(void *map);
+ssize_t fuse_dax_fmap_write_iter(struct kiocb *iocb, struct iov_iter *from);
+ssize_t fuse_dax_fmap_read_iter(struct kiocb *iocb, struct iov_iter	*to);
+int fuse_dax_fmap_mmap(struct file *file, struct vm_area_struct *vma);
+void __fuse_dax_fmap_meta_free(void *map);
 
-void famfs_teardown(struct fuse_conn *fc);
+void fuse_dax_fmap_teardown(struct fuse_conn *fc);
 
-/* Set fi->famfs_meta = NULL regardless of prior value */
-static inline void famfs_meta_init(struct fuse_inode *fi)
+/* Set fi->dax_fmap_meta = NULL regardless of prior value */
+static inline void fuse_dax_fmap_meta_init(struct fuse_inode *fi)
 {
-	fi->famfs_meta = NULL;
+	fi->dax_fmap_meta = NULL;
 }
 
-/* Set fi->famfs_meta iff the current value is NULL */
-static inline struct fuse_backing *famfs_meta_set(struct fuse_inode *fi,
+/* Set fi->dax_fmap_meta iff the current value is NULL */
+static inline struct fuse_backing *fuse_dax_fmap_meta_set(struct fuse_inode *fi,
 						  void *meta)
 {
-	return cmpxchg(&fi->famfs_meta, NULL, meta);
+	return cmpxchg(&fi->dax_fmap_meta, NULL, meta);
 }
 
-static inline void famfs_meta_free(struct fuse_inode *fi)
+static inline void fuse_dax_fmap_meta_free(struct fuse_inode *fi)
 {
-	if (fi->famfs_meta != NULL) {
-		__famfs_meta_free(fi->famfs_meta);
-		famfs_meta_set(fi, NULL);
+	if (fi->dax_fmap_meta != NULL) {
+		__fuse_dax_fmap_meta_free(fi->dax_fmap_meta);
+		fuse_dax_fmap_meta_set(fi, NULL);
 	}
 }
 
-static inline void famfs_init_devlist_sem(struct fuse_conn *fc)
+static inline void fuse_dax_init_devlist_sem(struct fuse_conn *fc)
 {
-	init_rwsem(&fc->famfs_devlist_sem);
+	init_rwsem(&fc->dax_devlist_sem);
 }
 
-static inline int fuse_file_famfs(struct fuse_inode *fi)
+static inline int fuse_file_dax_fmap(struct fuse_inode *fi)
 {
-	return (READ_ONCE(fi->famfs_meta) != NULL);
+	return (READ_ONCE(fi->dax_fmap_meta) != NULL);
 }
 
-int fuse_get_fmap(struct fuse_mount *fm, struct inode *inode);
+int fuse_dax_get_fmap(struct fuse_mount *fm, struct inode *inode);
 
-#else /* !CONFIG_FUSE_FAMFS_DAX */
+#else /* !CONFIG_FUSE_DAX_FMAP */
 
-static inline void famfs_teardown(struct fuse_conn *fc)
+static inline void fuse_dax_fmap_teardown(struct fuse_conn *fc)
 {
 }
-static inline ssize_t famfs_fuse_write_iter(struct kiocb *iocb,
+static inline ssize_t fuse_dax_fmap_write_iter(struct kiocb *iocb,
 					    struct iov_iter *to)
 {
 	return -ENODEV;
 }
-static inline ssize_t famfs_fuse_read_iter(struct kiocb *iocb,
+static inline ssize_t fuse_dax_fmap_read_iter(struct kiocb *iocb,
 					   struct iov_iter *to)
 {
 	return -ENODEV;
 }
-static inline int famfs_fuse_mmap(struct file *file,
+static inline int fuse_dax_fmap_mmap(struct file *file,
 				  struct vm_area_struct *vma)
 {
 	return -ENODEV;
 }
 
-static inline struct fuse_backing *famfs_meta_set(struct fuse_inode *fi,
+static inline struct fuse_backing *fuse_dax_fmap_meta_set(struct fuse_inode *fi,
 						  void *meta)
 {
 	return NULL;
 }
 
-static inline void famfs_meta_free(struct fuse_inode *fi)
+static inline void fuse_dax_fmap_meta_free(struct fuse_inode *fi)
 {
 }
 
-static inline void famfs_init_devlist_sem(struct fuse_conn *fc)
+static inline void fuse_dax_init_devlist_sem(struct fuse_conn *fc)
 {
 }
 
-static inline int fuse_file_famfs(struct fuse_inode *fi)
+static inline int fuse_file_dax_fmap(struct fuse_inode *fi)
 {
 	return 0;
 }
 
 static inline int
-fuse_get_fmap(struct fuse_mount *fm, struct inode *inode)
+fuse_dax_get_fmap(struct fuse_mount *fm, struct inode *inode)
 {
 	return 0;
 }
 
-#endif /* CONFIG_FUSE_FAMFS_DAX */
+#endif /* CONFIG_FUSE_DAX_FMAP */
 
 #endif /* _FS_FUSE_I_H */

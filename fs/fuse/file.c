@@ -278,9 +278,9 @@ static int fuse_open(struct inode *inode, struct file *file)
 	if (!err) {
 		ff = file->private_data;
 
-		if ((fm->fc->famfs_iomap) && (S_ISREG(inode->i_mode))) {
-			/* Get the famfs fmap - failure is fatal */
-			err = fuse_get_fmap(fm, inode);
+		if ((fm->fc->dax_fmap) && (S_ISREG(inode->i_mode))) {
+			/* Get the DAX fmap - failure is fatal */
+			err = fuse_dax_get_fmap(fm, inode);
 			if (err) {
 				fuse_sync_release(fi, ff, file->f_flags);
 				goto out_nowrite;
@@ -301,7 +301,7 @@ out_nowrite:
 		if (is_truncate)
 			truncate_pagecache(inode, 0);
 		else if (!(ff->open_flags & FOPEN_KEEP_CACHE) &&
-			 !fuse_file_famfs(fi))
+			 !fuse_file_dax_fmap(fi))
 			invalidate_inode_pages2(inode->i_mapping);
 	}
 	if (dax_truncate)
@@ -1831,8 +1831,8 @@ static ssize_t fuse_file_read_iter(struct kiocb *iocb, struct iov_iter *to)
 
 	if (FUSE_IS_VIRTIO_DAX(fi))
 		return fuse_dax_read_iter(iocb, to);
-	if (fuse_file_famfs(fi))
-		return famfs_fuse_read_iter(iocb, to);
+	if (fuse_file_dax_fmap(fi))
+		return fuse_dax_fmap_read_iter(iocb, to);
 
 	/* FOPEN_DIRECT_IO overrides FOPEN_PASSTHROUGH */
 	if (ff->open_flags & FOPEN_DIRECT_IO)
@@ -1855,8 +1855,8 @@ static ssize_t fuse_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 
 	if (FUSE_IS_VIRTIO_DAX(fi))
 		return fuse_dax_write_iter(iocb, from);
-	if (fuse_file_famfs(fi))
-		return famfs_fuse_write_iter(iocb, from);
+	if (fuse_file_dax_fmap(fi))
+		return fuse_dax_fmap_write_iter(iocb, from);
 
 	/* FOPEN_DIRECT_IO overrides FOPEN_PASSTHROUGH */
 	if (ff->open_flags & FOPEN_DIRECT_IO)
@@ -1876,8 +1876,8 @@ static ssize_t fuse_splice_read(struct file *in, loff_t *ppos,
 	struct fuse_inode *fi = get_fuse_inode(inode);
 
 	/* FOPEN_DIRECT_IO overrides FOPEN_PASSTHROUGH */
-	if (fuse_file_famfs(fi))
-		return -EIO; /* famfs does not use the page cache... */
+	if (fuse_file_dax_fmap(fi))
+		return -EIO; /* dax_fmap does not use the page cache... */
 	else if (fuse_file_passthrough(ff) && !(ff->open_flags & FOPEN_DIRECT_IO))
 		return fuse_passthrough_splice_read(in, ppos, pipe, len, flags);
 	else
@@ -1892,8 +1892,8 @@ static ssize_t fuse_splice_write(struct pipe_inode_info *pipe, struct file *out,
 	struct fuse_inode *fi = get_fuse_inode(inode);
 
 	/* FOPEN_DIRECT_IO overrides FOPEN_PASSTHROUGH */
-	if (fuse_file_famfs(fi))
-		return -EIO; /* famfs does not use the page cache... */
+	if (fuse_file_dax_fmap(fi))
+		return -EIO; /* dax_fmap does not use the page cache... */
 	else if (fuse_file_passthrough(ff) && !(ff->open_flags & FOPEN_DIRECT_IO))
 		return fuse_passthrough_splice_write(pipe, out, ppos, len, flags);
 	else
@@ -2402,8 +2402,8 @@ static int fuse_file_mmap(struct file *file, struct vm_area_struct *vma)
 	/* DAX mmap is superior to direct_io mmap */
 	if (FUSE_IS_VIRTIO_DAX(fi))
 		return fuse_dax_mmap(file, vma);
-	if (fuse_file_famfs(fi))
-		return famfs_fuse_mmap(file, vma);
+	if (fuse_file_dax_fmap(fi))
+		return fuse_dax_fmap_mmap(file, vma);
 
 	/*
 	 * If inode is in passthrough io mode, because it has some file open

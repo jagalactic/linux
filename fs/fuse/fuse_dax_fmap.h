@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * famfs - dax file system for shared fabric-attached memory
+ * fuse_dax_fmap - FUSE DAX file mapping infrastructure
  *
  * Copyright 2023-2026 Micron Technology, Inc.
  */
@@ -9,7 +9,7 @@
 
 /* KABI version 43 (aka v2) fmap structures
  *
- * The location of the memory backing for a famfs file is described by
+ * The location of the memory backing for a FUSE DAX file is described by
  * the response to the GET_FMAP fuse message (defined in
  * include/uapi/linux/fuse.h
  *
@@ -81,13 +81,13 @@
  */
 
 /*
- * The structures below are the in-memory metadata format for famfs files.
+ * The structures below are the in-memory metadata format for FUSE DAX fmap files.
  * Metadata retrieved via the GET_FMAP response is converted to this format
  * for use in resolving file mapping faults.
  *
  * The GET_FMAP response contains the same information, but in a more
  * message-and-versioning-friendly format. Those structs can be found in the
- * famfs section of include/uapi/linux/fuse.h (aka fuse_kernel.h in libfuse)
+ * FUSE DAX section of include/uapi/linux/fuse.h (aka fuse_kernel.h in libfuse)
  */
 
 enum fuse_dax_file_type {
@@ -117,7 +117,7 @@ struct fuse_dax_meta_interleaved_ext {
 };
 
 /*
- * Each famfs dax file has this hanging from its fuse_inode->famfs_meta
+ * Each FUSE DAX file has this hanging from its fuse_inode->dax_fmap_meta
  */
 struct fuse_dax_file_meta {
 	bool                   error;
@@ -138,7 +138,7 @@ struct fuse_dax_file_meta {
 };
 
 /*
- * famfs_daxdev - tracking struct for a daxdev within a famfs file system
+ * fuse_daxdev - tracking struct for a daxdev within a FUSE DAX filesystem
  *
  * This is the in-memory daxdev metadata that is populated by parsing
  * the responses to GET_FMAP messages
@@ -156,7 +156,7 @@ struct fuse_daxdev {
 #define MAX_DAXDEVS 24
 
 /*
- * famfs_dax_devlist - list of famfs_daxdev's
+ * fuse_dax_devlist - list of fuse_daxdev's
  */
 struct fuse_dax_devlist {
 	int nslots;

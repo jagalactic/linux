@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * famfs - dax file system for shared fabric-attached memory
+ * fuse_dax_fmap - FUSE DAX file mapping infrastructure
  *
  * Copyright 2023-2026 Micron Technology, Inc.
  *
@@ -22,42 +22,42 @@
 #include "fuse_dax_fmap.h"
 #include "fuse_i.h"
 
-static void famfs_set_daxdev_err(
+static void fuse_dax_set_daxdev_err(
 	struct fuse_conn *fc, struct dax_device *dax_devp);
 
 static int
-famfs_dax_notify_failure(struct dax_device *dax_devp, u64 offset,
+fuse_dax_notify_failure(struct dax_device *dax_devp, u64 offset,
 			u64 len, int mf_flags)
 {
 	struct fuse_conn *fc = dax_holder(dax_devp);
 
-	famfs_set_daxdev_err(fc, dax_devp);
+	fuse_dax_set_daxdev_err(fc, dax_devp);
 
 	return 0;
 }
 
-static const struct dax_holder_operations famfs_fuse_dax_holder_ops = {
-	.notify_failure		= famfs_dax_notify_failure,
+static const struct dax_holder_operations fuse_dax_fmap_holder_ops = {
+	.notify_failure		= fuse_dax_notify_failure,
 };
 
 /*
- * DAX address_space_operations for famfs.
- * famfs doesn't need dirty tracking - writes go directly to
+ * DAX address_space_operations for FUSE DAX fmap.
+ * FUSE DAX fmap doesn't need dirty tracking - writes go directly to
  * memory with no writeback required.
  */
-static const struct address_space_operations famfs_dax_aops = {
+static const struct address_space_operations fuse_dax_fmap_aops = {
 	.dirty_folio	= noop_dirty_folio,
 };
 
 /*****************************************************************************/
 
 /*
- * famfs_teardown()
+ * fuse_dax_fmap_teardown()
  *
- * Deallocate famfs metadata for a fuse_conn
+ * Deallocate DAX fmap metadata for a fuse_conn
  */
 void
-famfs_teardown(struct fuse_conn *fc)
+fuse_dax_fmap_teardown(struct fuse_conn *fc)
 {
 	struct fuse_dax_devlist *devlist __free(kfree) = fc->dax_devlist;
 	int i;
@@ -90,7 +90,7 @@ famfs_teardown(struct fuse_conn *fc)
 }
 
 static int
-famfs_verify_daxdev(const char *pathname, dev_t *devno)
+fuse_dax_verify_daxdev(const char *pathname, dev_t *devno)
 {
 	struct inode *inode;
 	struct path path;
@@ -122,7 +122,7 @@ out_path_put:
 }
 
 /**
- * famfs_fuse_get_daxdev() - Retrieve info for a DAX device from fuse server
+ * fuse_dax_get_daxdev() - Retrieve info for a DAX device from fuse server
  *
  * Send a GET_DAXDEV message to the fuse server to retrieve info on a
  * dax device.
@@ -135,7 +135,7 @@ out_path_put:
  *          -errno=failure
  */
 static int
-famfs_fuse_get_daxdev(struct fuse_mount *fm, const u64 index)
+fuse_dax_get_daxdev(struct fuse_mount *fm, const u64 index)
 {
 	struct fuse_daxdev_out daxdev_out = { 0 };
 	struct fuse_conn *fc = fm->fc;
@@ -171,7 +171,7 @@ famfs_fuse_get_daxdev(struct fuse_mount *fm, const u64 index)
 		return rc;
 	}
 
-	scoped_guard(rwsem_write, &fc->famfs_devlist_sem) {
+	scoped_guard(rwsem_write, &fc->dax_devlist_sem) {
 		daxdev = &fc->dax_devlist->devlist[index];
 
 		/* Abort if daxdev is now valid (races are possible here) */
@@ -181,9 +181,9 @@ famfs_fuse_get_daxdev(struct fuse_mount *fm, const u64 index)
 		}
 
 		/* Verify dev is valid and can be opened and gets the devno */
-		rc = famfs_verify_daxdev(daxdev_out.name, &daxdev->devno);
+		rc = fuse_dax_verify_daxdev(daxdev_out.name, &daxdev->devno);
 		if (rc) {
-			pr_err("%s: rc=%d from famfs_verify_daxdev()\n",
+			pr_err("%s: rc=%d from fuse_dax_verify_daxdev()\n",
 			       __func__, rc);
 			return rc;
 		}
@@ -202,10 +202,10 @@ famfs_fuse_get_daxdev(struct fuse_mount *fm, const u64 index)
 			return -ENODEV;
 		}
 
-		rc = fs_dax_get(daxdev->devp, fc, &famfs_fuse_dax_holder_ops);
+		rc = fs_dax_get(daxdev->devp, fc, &fuse_dax_fmap_holder_ops);
 		if (rc) {
 			/* Mark as valid with dax_err to prevent retry loop.
-			 * famfs_dax_err() will return -EIO on access attempts.
+			 * fuse_dax_err() will return -EIO on access attempts.
 			 * Teardown handles this case: skips fs_put_dax, calls put_dax.
 			 */
 			daxdev->dax_err = 1;
@@ -221,20 +221,20 @@ famfs_fuse_get_daxdev(struct fuse_mount *fm, const u64 index)
 }
 
 /**
- * famfs_update_daxdev_table() - Update the daxdev table
+ * fuse_dax_update_devtable() - Update the daxdev table
  * @fm:   fuse_mount
- * @meta: famfs_file_meta, in-memory format, built from a GET_FMAP response
+ * @meta: fuse_dax_file_meta, in-memory format, built from a GET_FMAP response
  *
  * This function is called for each new file fmap, to verify whether all
  * referenced daxdevs are already known (i.e. in the table). Any daxdev
  * indices referenced in @meta but not in the table will be retrieved via
- * famfs_fuse_get_daxdev() and added to the table
+ * fuse_dax_get_daxdev() and added to the table
  *
  * Return: 0=success
  *         -errno=failure
  */
 static int
-famfs_update_daxdev_table(
+fuse_dax_update_devtable(
 	struct fuse_mount *fm,
 	const struct fuse_dax_file_meta *meta)
 {
@@ -260,7 +260,7 @@ famfs_update_daxdev_table(
 			return -ENOMEM;
 		}
 
-		/* We don't need famfs_devlist_sem here because we use cmpxchg */
+		/* We don't need dax_devlist_sem here because we use cmpxchg */
 		if (cmpxchg(&fc->dax_devlist, NULL, local_devlist) != NULL) {
 			kfree(local_devlist->devlist);
 			kfree(local_devlist); /* another thread beat us to it */
@@ -268,7 +268,7 @@ famfs_update_daxdev_table(
 	}
 
 	/* Collect indices that need fetching while holding read lock */
-	scoped_guard(rwsem_read, &fc->famfs_devlist_sem) {
+	scoped_guard(rwsem_read, &fc->dax_devlist_sem) {
 		unsigned long i;
 
 		for_each_set_bit(i, (unsigned long *)&meta->dev_bitmap, MAX_DAXDEVS) {
@@ -279,7 +279,7 @@ famfs_update_daxdev_table(
 
 	/* Fetch needed daxdevs outside the read lock */
 	for (int j = 0; j < n_to_fetch; j++) {
-		err = famfs_fuse_get_daxdev(fm, indices_to_fetch[j]);
+		err = fuse_dax_get_daxdev(fm, indices_to_fetch[j]);
 		if (err)
 			pr_err("%s: failed to get daxdev=%d\n",
 			       __func__, indices_to_fetch[j]);
@@ -289,7 +289,7 @@ famfs_update_daxdev_table(
 }
 
 static void
-famfs_set_daxdev_err(
+fuse_dax_set_daxdev_err(
 	struct fuse_conn *fc,
 	struct dax_device *dax_devp)
 {
@@ -298,7 +298,7 @@ famfs_set_daxdev_err(
 	/* Gotta search the list by dax_devp;
 	 * read lock because we're not adding or removing daxdev entries
 	 */
-	scoped_guard(rwsem_write, &fc->famfs_devlist_sem) {
+	scoped_guard(rwsem_write, &fc->dax_devlist_sem) {
 		for (i = 0; i < fc->dax_devlist->nslots; i++) {
 			if (fc->dax_devlist->devlist[i].valid) {
 				struct fuse_daxdev *dd;
@@ -320,9 +320,9 @@ famfs_set_daxdev_err(
 
 /***************************************************************************/
 
-void __famfs_meta_free(void *famfs_meta)
+void __fuse_dax_fmap_meta_free(void *dax_fmap_meta)
 {
-	struct fuse_dax_file_meta *fmap = famfs_meta;
+	struct fuse_dax_file_meta *fmap = dax_fmap_meta;
 
 	if (!fmap)
 		return;
@@ -345,10 +345,10 @@ void __famfs_meta_free(void *famfs_meta)
 
 	kfree(fmap);
 }
-DEFINE_FREE(__famfs_meta_free, void *, if (_T) __famfs_meta_free(_T))
+DEFINE_FREE(__fuse_dax_fmap_meta_free, void *, if (_T) __fuse_dax_fmap_meta_free(_T))
 
 static int
-famfs_check_ext_alignment(struct fuse_dax_meta_simple_ext *se)
+fuse_dax_check_ext_alignment(struct fuse_dax_meta_simple_ext *se)
 {
 	int errs = 0;
 
@@ -366,7 +366,7 @@ famfs_check_ext_alignment(struct fuse_dax_meta_simple_ext *se)
 }
 
 /**
- * famfs_fuse_meta_alloc() - Allocate famfs file metadata
+ * fuse_dax_fmap_meta_alloc() - Allocate DAX fmap file metadata
  * @fmap_buf:  fmap buffer from fuse server
  * @fmap_buf_size: size of fmap buffer
  * @metap:         pointer where 'struct fuse_dax_file_meta' is returned
@@ -375,7 +375,7 @@ famfs_check_ext_alignment(struct fuse_dax_meta_simple_ext *se)
  *          -errno=failure
  */
 static int
-famfs_fuse_meta_alloc(
+fuse_dax_fmap_meta_alloc(
 	void *fmap_buf,
 	size_t fmap_buf_size,
 	struct fuse_dax_file_meta **metap)
@@ -407,7 +407,7 @@ famfs_fuse_meta_alloc(
 		return -ERANGE;
 	}
 
-	struct fuse_dax_file_meta *meta __free(__famfs_meta_free) = kzalloc(sizeof(*meta), GFP_KERNEL);
+	struct fuse_dax_file_meta *meta __free(__fuse_dax_fmap_meta_free) = kzalloc(sizeof(*meta), GFP_KERNEL);
 
 	if (!meta)
 		return -ENOMEM;
@@ -450,7 +450,7 @@ famfs_fuse_meta_alloc(
 			/* Record bitmap of referenced daxdev indices */
 			meta->dev_bitmap |= (1 << meta->se[i].dev_index);
 
-			errs += famfs_check_ext_alignment(&meta->se[i]);
+			errs += fuse_dax_check_ext_alignment(&meta->se[i]);
 
 			extent_total += meta->se[i].ext_len;
 		}
@@ -549,7 +549,7 @@ famfs_fuse_meta_alloc(
 				meta->dev_bitmap |= (1 << devindex);
 
 				extent_total += len;
-				errs += famfs_check_ext_alignment(&strips_out[j]);
+				errs += fuse_dax_check_ext_alignment(&strips_out[j]);
 				size_remainder -= len;
 			}
 		}
@@ -590,21 +590,21 @@ famfs_fuse_meta_alloc(
 }
 
 /**
- * famfs_file_init_dax() - init famfs dax file metadata
+ * fuse_dax_fmap_file_init() - init FUSE DAX fmap file metadata
  *
  * @fm:        fuse_mount
  * @inode:     the inode
  * @fmap_buf:  fmap response message
  * @fmap_size: Size of the fmap message
  *
- * Initialize famfs metadata for a file, based on the contents of the GET_FMAP
+ * Initialize DAX fmap metadata for a file, based on the contents of the GET_FMAP
  * response
  *
  * Return: 0=success
  *          -errno=failure
  */
 int
-famfs_file_init_dax(
+fuse_dax_fmap_file_init(
 	struct fuse_mount *fm,
 	struct inode *inode,
 	void *fmap_buf,
@@ -614,30 +614,30 @@ famfs_file_init_dax(
 	struct fuse_dax_file_meta *meta = NULL;
 	int rc;
 
-	if (fi->famfs_meta) {
+	if (fi->dax_fmap_meta) {
 		pr_notice("%s: i_no=%ld fmap_size=%ld ALREADY INITIALIZED\n",
 			  __func__,
 			  inode->i_ino, fmap_size);
 		return 0;
 	}
 
-	rc = famfs_fuse_meta_alloc(fmap_buf, fmap_size, &meta);
+	rc = fuse_dax_fmap_meta_alloc(fmap_buf, fmap_size, &meta);
 	if (rc)
 		goto errout;
 
 	/* Make sure this fmap doesn't reference any unknown daxdevs */
-	famfs_update_daxdev_table(fm, meta);
+	fuse_dax_update_devtable(fm, meta);
 
-	/* Publish the famfs metadata on fi->famfs_meta */
+	/* Publish the DAX fmap metadata on fi->dax_fmap_meta */
 	inode_lock(inode);
 
-	if (famfs_meta_set(fi, meta) == NULL) {
+	if (fuse_dax_fmap_meta_set(fi, meta) == NULL) {
 		i_size_write(inode, meta->file_size);
 		inode->i_flags |= S_DAX;
-		inode->i_data.a_ops = &famfs_dax_aops;
+		inode->i_data.a_ops = &fuse_dax_fmap_aops;
 	} else {
 		pr_debug("%s: file already had metadata\n", __func__);
-		__famfs_meta_free(meta);
+		__fuse_dax_fmap_meta_free(meta);
 		/* rc is 0 - the file is valid */
 	}
 
@@ -646,7 +646,7 @@ famfs_file_init_dax(
 
 errout:
 	if (rc)
-		__famfs_meta_free(meta);
+		__fuse_dax_fmap_meta_free(meta);
 
 	return rc;
 }
@@ -658,9 +658,9 @@ errout:
  * offsets within a dax device.
  */
 
-static int famfs_file_bad(struct inode *inode);
+static int fuse_dax_file_bad(struct inode *inode);
 
-static int famfs_dax_err(struct fuse_daxdev *dd)
+static int fuse_dax_err(struct fuse_daxdev *dd)
 {
 	if (!dd->valid) {
 		pr_err("%s: daxdev=%s invalid\n",
@@ -681,11 +681,11 @@ static int famfs_dax_err(struct fuse_daxdev *dd)
 }
 
 static int
-famfs_interleave_fileofs_to_daxofs(struct inode *inode, struct iomap *iomap,
+fuse_dax_interleave_fileofs_to_daxofs(struct inode *inode, struct iomap *iomap,
 			 loff_t file_offset, off_t len, unsigned int flags)
 {
 	struct fuse_inode *fi = get_fuse_inode(inode);
-	struct fuse_dax_file_meta *meta = fi->famfs_meta;
+	struct fuse_dax_file_meta *meta = fi->dax_fmap_meta;
 	struct fuse_conn *fc = get_fuse_conn(inode);
 	loff_t local_offset = file_offset;
 
@@ -695,7 +695,7 @@ famfs_interleave_fileofs_to_daxofs(struct inode *inode, struct iomap *iomap,
 		goto err_out;
 	}
 
-	if (famfs_file_bad(inode))
+	if (fuse_dax_file_bad(inode))
 		goto err_out;
 
 	iomap->offset = file_offset;
@@ -745,7 +745,7 @@ famfs_interleave_fileofs_to_daxofs(struct inode *inode, struct iomap *iomap,
 
 			dd = &fc->dax_devlist->devlist[strip_devidx];
 
-			rc = famfs_dax_err(dd);
+			rc = fuse_dax_err(dd);
 			if (rc) {
 				/* Shut down access to this file */
 				meta->error = true;
@@ -784,9 +784,9 @@ famfs_interleave_fileofs_to_daxofs(struct inode *inode, struct iomap *iomap,
 }
 
 /**
- * famfs_fileofs_to_daxofs() - Resolve (file, offset, len) to (daxdev, offset, len)
+ * fuse_dax_fileofs_to_daxofs() - Resolve (file, offset, len) to (daxdev, offset, len)
  *
- * This function is called by famfs_fuse_iomap_begin() to resolve an offset in a
+ * This function is called by fuse_dax_fmap_iomap_begin() to resolve an offset in a
  * file to an offset in a dax device. This is upcalled from dax from calls to
  * both  * dax_iomap_fault() and dax_iomap_rw(). Dax finishes the job resolving
  * a fault to a specific physical page (the fault case) or doing a memcpy
@@ -801,17 +801,17 @@ famfs_interleave_fileofs_to_daxofs(struct inode *inode, struct iomap *iomap,
  * @file_offset: Within the file where the fault occurred (will be page boundary)
  * @len:         The length of the faulted mapping (will be a page multiple)
  *               (will be trimmed in *iomap if it's disjoint in the extent list)
- * @flags:       flags passed to famfs_fuse_iomap_begin(), and sent back via
+ * @flags:       flags passed to fuse_dax_fmap_iomap_begin(), and sent back via
  *               struct iomap
  *
  * Return values: 0. (info is returned in a modified @iomap struct)
  */
 static int
-famfs_fileofs_to_daxofs(struct inode *inode, struct iomap *iomap,
+fuse_dax_fileofs_to_daxofs(struct inode *inode, struct iomap *iomap,
 			loff_t file_offset, off_t len, unsigned int flags)
 {
 	struct fuse_inode *fi = get_fuse_inode(inode);
-	struct fuse_dax_file_meta *meta = fi->famfs_meta;
+	struct fuse_dax_file_meta *meta = fi->dax_fmap_meta;
 	struct fuse_conn *fc = get_fuse_conn(inode);
 	loff_t local_offset = file_offset;
 
@@ -820,11 +820,11 @@ famfs_fileofs_to_daxofs(struct inode *inode, struct iomap *iomap,
 		goto err_out;
 	}
 
-	if (famfs_file_bad(inode))
+	if (fuse_dax_file_bad(inode))
 		goto err_out;
 
 	if (meta->fm_extent_type == FUSE_DAX_INTERLEAVED_EXTENT)
-		return famfs_interleave_fileofs_to_daxofs(inode, iomap,
+		return fuse_dax_interleave_fileofs_to_daxofs(inode, iomap,
 							  file_offset,
 							  len, flags);
 
@@ -860,7 +860,7 @@ famfs_fileofs_to_daxofs(struct inode *inode, struct iomap *iomap,
 
 			dd = &fc->dax_devlist->devlist[daxdev_idx];
 
-			rc = famfs_dax_err(dd);
+			rc = fuse_dax_err(dd);
 			if (rc) {
 				/* Shut down access to this file */
 				meta->error = true;
@@ -911,7 +911,7 @@ famfs_fileofs_to_daxofs(struct inode *inode, struct iomap *iomap,
 }
 
 /**
- * famfs_fuse_iomap_begin() - Handler for iomap_begin upcall from dax
+ * fuse_dax_fmap_iomap_begin() - Handler for iomap_begin upcall from dax
  *
  * This function is pretty simple because files are
  * * never partially allocated
@@ -927,32 +927,32 @@ famfs_fileofs_to_daxofs(struct inode *inode, struct iomap *iomap,
  * @srcmap: source mapping if it is a COW operation (which it is not here)
  */
 static int
-famfs_fuse_iomap_begin(struct inode *inode, loff_t offset, loff_t length,
+fuse_dax_fmap_iomap_begin(struct inode *inode, loff_t offset, loff_t length,
 		  unsigned int flags, struct iomap *iomap, struct iomap *srcmap)
 {
 	struct fuse_inode *fi = get_fuse_inode(inode);
-	struct fuse_dax_file_meta *meta = fi->famfs_meta;
+	struct fuse_dax_file_meta *meta = fi->dax_fmap_meta;
 	size_t size;
 
 	size = i_size_read(inode);
 
 	WARN_ON(size != meta->file_size);
 
-	return famfs_fileofs_to_daxofs(inode, iomap, offset, length, flags);
+	return fuse_dax_fileofs_to_daxofs(inode, iomap, offset, length, flags);
 }
 
-/* Note: We never need a special set of write_iomap_ops because famfs never
+/* Note: We never need a special set of write_iomap_ops because FUSE DAX fmap never
  * performs allocation on write.
  */
-const struct iomap_ops famfs_iomap_ops = {
-	.iomap_begin		= famfs_fuse_iomap_begin,
+const struct iomap_ops fuse_dax_fmap_iomap_ops = {
+	.iomap_begin		= fuse_dax_fmap_iomap_begin,
 };
 
 /*********************************************************************
  * vm_operations
  */
 static vm_fault_t
-__famfs_fuse_filemap_fault(struct vm_fault *vmf, unsigned int pe_size,
+__fuse_dax_fmap_filemap_fault(struct vm_fault *vmf, unsigned int pe_size,
 		      bool write_fault)
 {
 	struct inode *inode = file_inode(vmf->vma->vm_file);
@@ -969,7 +969,7 @@ __famfs_fuse_filemap_fault(struct vm_fault *vmf, unsigned int pe_size,
 		file_update_time(vmf->vma->vm_file);
 	}
 
-	ret = dax_iomap_fault(vmf, pe_size, &pfn, NULL, &famfs_iomap_ops);
+	ret = dax_iomap_fault(vmf, pe_size, &pfn, NULL, &fuse_dax_fmap_iomap_ops);
 	if (ret & VM_FAULT_NEEDDSYNC)
 		ret = dax_finish_sync_fault(vmf, pe_size, pfn);
 
@@ -980,37 +980,37 @@ __famfs_fuse_filemap_fault(struct vm_fault *vmf, unsigned int pe_size,
 }
 
 static inline bool
-famfs_is_write_fault(struct vm_fault *vmf)
+fuse_dax_is_write_fault(struct vm_fault *vmf)
 {
 	return (vmf->flags & FAULT_FLAG_WRITE) &&
 	       (vmf->vma->vm_flags & VM_SHARED);
 }
 
 static vm_fault_t
-famfs_filemap_fault(struct vm_fault *vmf)
+fuse_dax_filemap_fault(struct vm_fault *vmf)
 {
-	return __famfs_fuse_filemap_fault(vmf, 0, famfs_is_write_fault(vmf));
+	return __fuse_dax_fmap_filemap_fault(vmf, 0, fuse_dax_is_write_fault(vmf));
 }
 
 static vm_fault_t
-famfs_filemap_huge_fault(struct vm_fault *vmf, unsigned int pe_size)
+fuse_dax_filemap_huge_fault(struct vm_fault *vmf, unsigned int pe_size)
 {
-	return __famfs_fuse_filemap_fault(vmf, pe_size,
-					  famfs_is_write_fault(vmf));
+	return __fuse_dax_fmap_filemap_fault(vmf, pe_size,
+					  fuse_dax_is_write_fault(vmf));
 }
 
 static vm_fault_t
-famfs_filemap_mkwrite(struct vm_fault *vmf)
+fuse_dax_filemap_mkwrite(struct vm_fault *vmf)
 {
-	return __famfs_fuse_filemap_fault(vmf, 0, true);
+	return __fuse_dax_fmap_filemap_fault(vmf, 0, true);
 }
 
-const struct vm_operations_struct famfs_file_vm_ops = {
-	.fault		= famfs_filemap_fault,
-	.huge_fault	= famfs_filemap_huge_fault,
+const struct vm_operations_struct fuse_dax_fmap_vm_ops = {
+	.fault		= fuse_dax_filemap_fault,
+	.huge_fault	= fuse_dax_filemap_huge_fault,
 	.map_pages	= filemap_map_pages,
-	.page_mkwrite	= famfs_filemap_mkwrite,
-	.pfn_mkwrite	= famfs_filemap_mkwrite,
+	.page_mkwrite	= fuse_dax_filemap_mkwrite,
+	.pfn_mkwrite	= fuse_dax_filemap_mkwrite,
 };
 
 /*********************************************************************
@@ -1018,7 +1018,7 @@ const struct vm_operations_struct famfs_file_vm_ops = {
  */
 
 /**
- * famfs_file_bad() - Check for files that aren't in a valid state
+ * fuse_dax_file_bad() - Check for files that aren't in a valid state
  *
  * @inode: inode
  *
@@ -1026,14 +1026,14 @@ const struct vm_operations_struct famfs_file_vm_ops = {
  *          -errno=failure
  */
 static int
-famfs_file_bad(struct inode *inode)
+fuse_dax_file_bad(struct inode *inode)
 {
 	struct fuse_inode *fi = get_fuse_inode(inode);
-	struct fuse_dax_file_meta *meta = fi->famfs_meta;
+	struct fuse_dax_file_meta *meta = fi->dax_fmap_meta;
 	size_t i_size = i_size_read(inode);
 
 	if (!meta) {
-		pr_err("%s: un-initialized famfs file\n", __func__);
+		pr_err("%s: un-initialized dax fmap file\n", __func__);
 		return -EIO;
 	}
 	if (meta->error) {
@@ -1055,7 +1055,7 @@ famfs_file_bad(struct inode *inode)
 }
 
 static ssize_t
-famfs_fuse_rw_prep(struct kiocb *iocb, struct iov_iter *ubuf)
+fuse_dax_fmap_rw_prep(struct kiocb *iocb, struct iov_iter *ubuf)
 {
 	struct inode *inode = iocb->ki_filp->f_mapping->host;
 	size_t i_size = i_size_read(inode);
@@ -1063,7 +1063,7 @@ famfs_fuse_rw_prep(struct kiocb *iocb, struct iov_iter *ubuf)
 	size_t max_count;
 	ssize_t rc;
 
-	rc = famfs_file_bad(inode);
+	rc = fuse_dax_file_bad(inode);
 	if (rc)
 		return (ssize_t)rc;
 
@@ -1083,57 +1083,57 @@ famfs_fuse_rw_prep(struct kiocb *iocb, struct iov_iter *ubuf)
 }
 
 ssize_t
-famfs_fuse_read_iter(struct kiocb *iocb, struct iov_iter	*to)
+fuse_dax_fmap_read_iter(struct kiocb *iocb, struct iov_iter	*to)
 {
 	ssize_t rc;
 
-	rc = famfs_fuse_rw_prep(iocb, to);
+	rc = fuse_dax_fmap_rw_prep(iocb, to);
 	if (rc)
 		return rc;
 
 	if (!iov_iter_count(to))
 		return 0;
 
-	rc = dax_iomap_rw(iocb, to, &famfs_iomap_ops);
+	rc = dax_iomap_rw(iocb, to, &fuse_dax_fmap_iomap_ops);
 
 	file_accessed(iocb->ki_filp);
 	return rc;
 }
 
 ssize_t
-famfs_fuse_write_iter(struct kiocb *iocb, struct iov_iter *from)
+fuse_dax_fmap_write_iter(struct kiocb *iocb, struct iov_iter *from)
 {
 	ssize_t rc;
 
-	rc = famfs_fuse_rw_prep(iocb, from);
+	rc = fuse_dax_fmap_rw_prep(iocb, from);
 	if (rc)
 		return rc;
 
 	if (!iov_iter_count(from))
 		return 0;
 
-	return dax_iomap_rw(iocb, from, &famfs_iomap_ops);
+	return dax_iomap_rw(iocb, from, &fuse_dax_fmap_iomap_ops);
 }
 
 int
-famfs_fuse_mmap(struct file *file, struct vm_area_struct *vma)
+fuse_dax_fmap_mmap(struct file *file, struct vm_area_struct *vma)
 {
 	struct inode *inode = file_inode(file);
 	ssize_t rc;
 
-	rc = famfs_file_bad(inode);
+	rc = fuse_dax_file_bad(inode);
 	if (rc)
 		return rc;
 
 	file_accessed(file);
-	vma->vm_ops = &famfs_file_vm_ops;
+	vma->vm_ops = &fuse_dax_fmap_vm_ops;
 	vm_flags_set(vma, VM_HUGEPAGE);
 	return 0;
 }
 
 #define FMAP_BUFSIZE PAGE_SIZE
 
-int fuse_get_fmap(struct fuse_mount *fm, struct inode *inode)
+int fuse_dax_get_fmap(struct fuse_mount *fm, struct inode *inode)
 {
 	struct fuse_inode *fi = get_fuse_inode(inode);
 	size_t fmap_bufsize = FMAP_BUFSIZE;
@@ -1143,8 +1143,8 @@ int fuse_get_fmap(struct fuse_mount *fm, struct inode *inode)
 
 	FUSE_ARGS(args);
 
-	/* Don't retrieve if we already have the famfs metadata */
-	if (fi->famfs_meta)
+	/* Don't retrieve if we already have the DAX fmap metadata */
+	if (fi->dax_fmap_meta)
 		return 0;
 
 	void *fmap_buf __free(kfree) = kzalloc(FMAP_BUFSIZE, GFP_KERNEL);
@@ -1174,7 +1174,7 @@ int fuse_get_fmap(struct fuse_mount *fm, struct inode *inode)
 	fmap_size = rc;
 
 	/* Convert fmap into in-memory format and hang from inode */
-	rc = famfs_file_init_dax(fm, inode, fmap_buf, fmap_size);
+	rc = fuse_dax_fmap_file_init(fm, inode, fmap_buf, fmap_size);
 
 	return rc;
 }
