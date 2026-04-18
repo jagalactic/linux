@@ -19,7 +19,7 @@
 #include <linux/namei.h>
 #include <linux/string.h>
 
-#include "famfs_kfmap.h"
+#include "fuse_dax_fmap.h"
 #include "fuse_i.h"
 
 static void famfs_set_daxdev_err(
@@ -59,7 +59,7 @@ static const struct address_space_operations famfs_dax_aops = {
 void
 famfs_teardown(struct fuse_conn *fc)
 {
-	struct famfs_dax_devlist *devlist __free(kfree) = fc->dax_devlist;
+	struct fuse_dax_devlist *devlist __free(kfree) = fc->dax_devlist;
 	int i;
 
 	fc->dax_devlist = NULL;
@@ -72,7 +72,7 @@ famfs_teardown(struct fuse_conn *fc)
 
 	/* Close & release all the daxdevs in our table */
 	for (i = 0; i < devlist->nslots; i++) {
-		struct famfs_daxdev *dd = &devlist->devlist[i];
+		struct fuse_daxdev *dd = &devlist->devlist[i];
 
 		if (!dd->valid)
 			continue;
@@ -139,7 +139,7 @@ famfs_fuse_get_daxdev(struct fuse_mount *fm, const u64 index)
 {
 	struct fuse_daxdev_out daxdev_out = { 0 };
 	struct fuse_conn *fc = fm->fc;
-	struct famfs_daxdev *daxdev;
+	struct fuse_daxdev *daxdev;
 	int rc;
 
 	FUSE_ARGS(args);
@@ -236,9 +236,9 @@ famfs_fuse_get_daxdev(struct fuse_mount *fm, const u64 index)
 static int
 famfs_update_daxdev_table(
 	struct fuse_mount *fm,
-	const struct famfs_file_meta *meta)
+	const struct fuse_dax_file_meta *meta)
 {
-	struct famfs_dax_devlist *local_devlist;
+	struct fuse_dax_devlist *local_devlist;
 	struct fuse_conn *fc = fm->fc;
 	int indices_to_fetch[MAX_DAXDEVS];
 	int n_to_fetch = 0;
@@ -253,7 +253,7 @@ famfs_update_daxdev_table(
 		local_devlist->nslots = MAX_DAXDEVS;
 
 		local_devlist->devlist = kcalloc(MAX_DAXDEVS,
-						 sizeof(struct famfs_daxdev),
+						 sizeof(struct fuse_daxdev),
 						 GFP_KERNEL);
 		if (!local_devlist->devlist) {
 			kfree(local_devlist);
@@ -301,7 +301,7 @@ famfs_set_daxdev_err(
 	scoped_guard(rwsem_write, &fc->famfs_devlist_sem) {
 		for (i = 0; i < fc->dax_devlist->nslots; i++) {
 			if (fc->dax_devlist->devlist[i].valid) {
-				struct famfs_daxdev *dd;
+				struct fuse_daxdev *dd;
 
 				dd = &fc->dax_devlist->devlist[i];
 				if (dd->devp != dax_devp)
@@ -322,16 +322,16 @@ famfs_set_daxdev_err(
 
 void __famfs_meta_free(void *famfs_meta)
 {
-	struct famfs_file_meta *fmap = famfs_meta;
+	struct fuse_dax_file_meta *fmap = famfs_meta;
 
 	if (!fmap)
 		return;
 
 	switch (fmap->fm_extent_type) {
-	case SIMPLE_DAX_EXTENT:
+	case FUSE_DAX_SIMPLE_EXTENT:
 		kfree(fmap->se);
 		break;
-	case INTERLEAVED_EXTENT:
+	case FUSE_DAX_INTERLEAVED_EXTENT:
 		if (fmap->ie) {
 			for (int i = 0; i < fmap->fm_niext; i++)
 				kfree(fmap->ie[i].ie_strips);
@@ -348,7 +348,7 @@ void __famfs_meta_free(void *famfs_meta)
 DEFINE_FREE(__famfs_meta_free, void *, if (_T) __famfs_meta_free(_T))
 
 static int
-famfs_check_ext_alignment(struct famfs_meta_simple_ext *se)
+famfs_check_ext_alignment(struct fuse_dax_meta_simple_ext *se)
 {
 	int errs = 0;
 
@@ -369,7 +369,7 @@ famfs_check_ext_alignment(struct famfs_meta_simple_ext *se)
  * famfs_fuse_meta_alloc() - Allocate famfs file metadata
  * @fmap_buf:  fmap buffer from fuse server
  * @fmap_buf_size: size of fmap buffer
- * @metap:         pointer where 'struct famfs_file_meta' is returned
+ * @metap:         pointer where 'struct fuse_dax_file_meta' is returned
  *
  * Returns: 0=success
  *          -errno=failure
@@ -378,7 +378,7 @@ static int
 famfs_fuse_meta_alloc(
 	void *fmap_buf,
 	size_t fmap_buf_size,
-	struct famfs_file_meta **metap)
+	struct fuse_dax_file_meta **metap)
 {
 	struct fuse_dax_fmap_header *fmh;
 	size_t extent_total = 0;
@@ -407,7 +407,7 @@ famfs_fuse_meta_alloc(
 		return -ERANGE;
 	}
 
-	struct famfs_file_meta *meta __free(__famfs_meta_free) = kzalloc(sizeof(*meta), GFP_KERNEL);
+	struct fuse_dax_file_meta *meta __free(__famfs_meta_free) = kzalloc(sizeof(*meta), GFP_KERNEL);
 
 	if (!meta)
 		return -ENOMEM;
@@ -535,7 +535,7 @@ famfs_fuse_meta_alloc(
 
 			/* Inner loop is over strips */
 			for (j = 0; j < nstrips; j++) {
-				struct famfs_meta_simple_ext *strips_out;
+				struct fuse_dax_meta_simple_ext *strips_out;
 				u64 devindex = sie_in[j].se_devindex;
 				u64 offset   = sie_in[j].se_offset;
 				u64 len      = sie_in[j].se_len;
@@ -611,7 +611,7 @@ famfs_file_init_dax(
 	size_t fmap_size)
 {
 	struct fuse_inode *fi = get_fuse_inode(inode);
-	struct famfs_file_meta *meta = NULL;
+	struct fuse_dax_file_meta *meta = NULL;
 	int rc;
 
 	if (fi->famfs_meta) {
@@ -660,7 +660,7 @@ errout:
 
 static int famfs_file_bad(struct inode *inode);
 
-static int famfs_dax_err(struct famfs_daxdev *dd)
+static int famfs_dax_err(struct fuse_daxdev *dd)
 {
 	if (!dd->valid) {
 		pr_err("%s: daxdev=%s invalid\n",
@@ -685,12 +685,12 @@ famfs_interleave_fileofs_to_daxofs(struct inode *inode, struct iomap *iomap,
 			 loff_t file_offset, off_t len, unsigned int flags)
 {
 	struct fuse_inode *fi = get_fuse_inode(inode);
-	struct famfs_file_meta *meta = fi->famfs_meta;
+	struct fuse_dax_file_meta *meta = fi->famfs_meta;
 	struct fuse_conn *fc = get_fuse_conn(inode);
 	loff_t local_offset = file_offset;
 
-	/* This function is only for extent_type INTERLEAVED_EXTENT */
-	if (meta->fm_extent_type != INTERLEAVED_EXTENT) {
+	/* This function is only for extent_type FUSE_DAX_INTERLEAVED_EXTENT */
+	if (meta->fm_extent_type != FUSE_DAX_INTERLEAVED_EXTENT) {
 		pr_err("%s: bad extent type\n", __func__);
 		goto err_out;
 	}
@@ -701,7 +701,7 @@ famfs_interleave_fileofs_to_daxofs(struct inode *inode, struct iomap *iomap,
 	iomap->offset = file_offset;
 
 	for (int i = 0; i < meta->fm_niext; i++) {
-		struct famfs_meta_interleaved_ext *fei = &meta->ie[i];
+		struct fuse_dax_meta_interleaved_ext *fei = &meta->ie[i];
 		u64 chunk_size = fei->fie_chunk_size;
 		u64 nstrips = fei->fie_nstrips;
 		u64 ext_size =  min(fei->fie_nbytes, meta->file_size);
@@ -719,7 +719,7 @@ famfs_interleave_fileofs_to_daxofs(struct inode *inode, struct iomap *iomap,
 
 		/* Is the data is in this striped extent? */
 		if (local_offset < ext_size) {
-			struct famfs_daxdev *dd;
+			struct fuse_daxdev *dd;
 			u64 chunk_num       = local_offset / chunk_size;
 			u64 chunk_offset    = local_offset % chunk_size;
 			u64 chunk_remainder = chunk_size - chunk_offset;
@@ -811,7 +811,7 @@ famfs_fileofs_to_daxofs(struct inode *inode, struct iomap *iomap,
 			loff_t file_offset, off_t len, unsigned int flags)
 {
 	struct fuse_inode *fi = get_fuse_inode(inode);
-	struct famfs_file_meta *meta = fi->famfs_meta;
+	struct fuse_dax_file_meta *meta = fi->famfs_meta;
 	struct fuse_conn *fc = get_fuse_conn(inode);
 	loff_t local_offset = file_offset;
 
@@ -823,7 +823,7 @@ famfs_fileofs_to_daxofs(struct inode *inode, struct iomap *iomap,
 	if (famfs_file_bad(inode))
 		goto err_out;
 
-	if (meta->fm_extent_type == INTERLEAVED_EXTENT)
+	if (meta->fm_extent_type == FUSE_DAX_INTERLEAVED_EXTENT)
 		return famfs_interleave_fileofs_to_daxofs(inode, iomap,
 							  file_offset,
 							  len, flags);
@@ -848,7 +848,7 @@ famfs_fileofs_to_daxofs(struct inode *inode, struct iomap *iomap,
 		 */
 		if (local_offset < dax_ext_len) {
 			loff_t ext_len_remainder = dax_ext_len - local_offset;
-			struct famfs_daxdev *dd;
+			struct fuse_daxdev *dd;
 			int rc;
 
 			if (daxdev_idx >= fc->dax_devlist->nslots) {
@@ -931,7 +931,7 @@ famfs_fuse_iomap_begin(struct inode *inode, loff_t offset, loff_t length,
 		  unsigned int flags, struct iomap *iomap, struct iomap *srcmap)
 {
 	struct fuse_inode *fi = get_fuse_inode(inode);
-	struct famfs_file_meta *meta = fi->famfs_meta;
+	struct fuse_dax_file_meta *meta = fi->famfs_meta;
 	size_t size;
 
 	size = i_size_read(inode);
@@ -1029,7 +1029,7 @@ static int
 famfs_file_bad(struct inode *inode)
 {
 	struct fuse_inode *fi = get_fuse_inode(inode);
-	struct famfs_file_meta *meta = fi->famfs_meta;
+	struct fuse_dax_file_meta *meta = fi->famfs_meta;
 	size_t i_size = i_size_read(inode);
 
 	if (!meta) {

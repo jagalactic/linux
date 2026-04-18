@@ -1009,7 +1009,7 @@ struct fuse_conn {
 
 #if IS_ENABLED(CONFIG_FUSE_FAMFS_DAX)
 	struct rw_semaphore famfs_devlist_sem;
-	struct famfs_dax_devlist *dax_devlist;
+	struct fuse_dax_devlist *dax_devlist;
 #endif
 };
 
