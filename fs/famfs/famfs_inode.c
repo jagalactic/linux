@@ -483,12 +483,13 @@ static void famfs_kill_sb(struct super_block *sb)
 
 	if (fsi->dax_devp)
 		fs_put_dax(fsi->dax_devp, sb);
+
+	kill_char_super(sb);
+
 	if (fsi && fsi->rootdev)
 		kfree(fsi->rootdev);
 	kfree(fsi);
 	sb->s_fs_info = NULL;
-
-	kill_char_super(sb); /* new */
 }
 
 #define MODULE_NAME "famfs"
