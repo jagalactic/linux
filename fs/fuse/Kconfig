@@ -89,3 +89,17 @@ config FUSE_DAX_FMAP
 	  backed by character DAX devices.
 
 	  To enable FUSE DAX fmap support, answer Y
+
+config FUSE_DAX_FMAP_BPF
+	bool "BPF struct_ops for FUSE DAX fmap extent resolution"
+	depends on FUSE_DAX_FMAP
+	depends on BPF_SYSCALL
+	depends on BPF_JIT
+	default FUSE_DAX_FMAP
+	help
+	  This enables BPF-based extensible extent resolution for
+	  FUSE DAX fmap. Filesystem-specific extent layouts (e.g.,
+	  RAID-0 striping) are defined by BPF struct_ops programs
+	  rather than hardcoded in the kernel.
+
+	  If unsure, say Y.
