@@ -244,15 +244,15 @@
  *  7.46
  *  - Add FUSE_DAX_FMAP capability - ability to handle in-kernel fsdax maps
  *  - Add the following structures for the GET_FMAP message reply components:
- *    - struct fuse_famfs_simple_ext
- *    - struct fuse_famfs_iext
- *    - struct fuse_famfs_fmap_header
+ *    - struct fuse_dax_simple_ext
+ *    - struct fuse_dax_iext
+ *    - struct fuse_dax_fmap_header
  *  - Add the following structs for the GET_DAXDEV message and reply
  *    - struct fuse_get_daxdev_in
  *    - struct fuse_get_daxdev_out
  *  - Add the following enumerated types
- *    - enum fuse_famfs_file_type
- *    - enum famfs_ext_type
+ *    - enum fuse_dax_file_type
+ *    - enum fuse_dax_ext_type
  */
 
 #ifndef _LINUX_FUSE_H
@@ -461,7 +461,7 @@ struct fuse_file_lock {
  * FUSE_OVER_IO_URING: Indicate that client supports io-uring
  * FUSE_REQUEST_TIMEOUT: kernel supports timing out requests.
  *			 init_out.request_timeout contains the timeout (in secs)
- * FUSE_DAX_FMAP: kernel supports dev_dax_iomap (aka famfs) fmaps
+ * FUSE_DAX_FMAP: kernel supports dev_dax_iomap fmaps
  */
 #define FUSE_ASYNC_READ		(1 << 0)
 #define FUSE_POSIX_LOCKS	(1 << 1)
@@ -679,7 +679,7 @@ enum fuse_opcode {
 	FUSE_STATX		= 52,
 	FUSE_COPY_FILE_RANGE_64	= 53,
 
-	/* Famfs / devdax opcodes */
+	/* FUSE DAX fmap opcodes */
 	FUSE_GET_FMAP           = 54,
 	FUSE_GET_DAXDEV         = 55,
 
@@ -1327,33 +1327,33 @@ struct fuse_uring_cmd_req {
 	uint8_t padding[6];
 };
 
-/* Famfs fmap message components */
+/* FUSE DAX fmap message components */
 
-#define FAMFS_FMAP_VERSION 1
+#define FUSE_DAX_FMAP_VERSION 1
 
-#define FAMFS_FMAP_MAX 32768 /* Largest supported fmap message */
-#define FUSE_FAMFS_MAX_EXTENTS 32
-#define FUSE_FAMFS_MAX_STRIPS 32
+#define FUSE_DAX_FMAP_MAX 32768 /* Largest supported fmap message */
+#define FUSE_DAX_MAX_EXTENTS 32
+#define FUSE_DAX_MAX_STRIPS 32
 
-enum fuse_famfs_file_type {
-	FUSE_FAMFS_FILE_REG,
-	FUSE_FAMFS_FILE_SUPERBLOCK,
-	FUSE_FAMFS_FILE_LOG,
+enum fuse_dax_file_type {
+	FUSE_DAX_FILE_REG,
+	FUSE_DAX_FILE_SUPERBLOCK,
+	FUSE_DAX_FILE_LOG,
 };
 
-enum famfs_ext_type {
-	FUSE_FAMFS_EXT_SIMPLE = 0,
-	FUSE_FAMFS_EXT_INTERLEAVE = 1,
+enum fuse_dax_ext_type {
+	FUSE_DAX_EXT_SIMPLE = 0,
+	FUSE_DAX_EXT_INTERLEAVE = 1,
 };
 
-struct fuse_famfs_simple_ext {
+struct fuse_dax_simple_ext {
 	uint32_t se_devindex;
 	uint32_t reserved;
 	uint64_t se_offset;
 	uint64_t se_len;
 };
 
-struct fuse_famfs_iext { /* Interleaved extent */
+struct fuse_dax_iext { /* Interleaved extent */
 	uint32_t ie_nstrips;
 	uint32_t ie_chunk_size;
 	uint64_t ie_nbytes; /* Total bytes for this interleaved_ext;
@@ -1362,11 +1362,11 @@ struct fuse_famfs_iext { /* Interleaved extent */
 	uint64_t reserved;
 };
 
-struct fuse_famfs_fmap_header {
-	uint8_t file_type; /* enum famfs_file_type */
+struct fuse_dax_fmap_header {
+	uint8_t file_type; /* enum fuse_dax_file_type */
 	uint8_t reserved;
 	uint16_t fmap_version;
-	uint32_t ext_type; /* enum famfs_log_ext_type */
+	uint32_t ext_type; /* enum fuse_dax_ext_type */
 	uint32_t nextents;
 	uint32_t reserved0;
 	uint64_t file_size;
@@ -1392,8 +1392,8 @@ struct fuse_daxdev_out {
 static inline int32_t fmap_msg_min_size(void)
 {
 	/* Smallest fmap message is a header plus one simple extent */
-	return (sizeof(struct fuse_famfs_fmap_header)
-		+ sizeof(struct fuse_famfs_simple_ext));
+	return (sizeof(struct fuse_dax_fmap_header)
+		+ sizeof(struct fuse_dax_simple_ext));
 }
 
 #endif /* _LINUX_FUSE_H */

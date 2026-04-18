@@ -380,7 +380,7 @@ famfs_fuse_meta_alloc(
 	size_t fmap_buf_size,
 	struct famfs_file_meta **metap)
 {
-	struct fuse_famfs_fmap_header *fmh;
+	struct fuse_dax_fmap_header *fmh;
 	size_t extent_total = 0;
 	size_t next_offset = 0;
 	int errs = 0;
@@ -401,9 +401,9 @@ famfs_fuse_meta_alloc(
 		return -ERANGE;
 	}
 
-	if (fmh->nextents > FUSE_FAMFS_MAX_EXTENTS) {
+	if (fmh->nextents > FUSE_DAX_MAX_EXTENTS) {
 		pr_err("%s: nextents %d > max (%d) 1\n",
-		       __func__, fmh->nextents, FUSE_FAMFS_MAX_EXTENTS);
+		       __func__, fmh->nextents, FUSE_DAX_MAX_EXTENTS);
 		return -ERANGE;
 	}
 
@@ -418,8 +418,8 @@ famfs_fuse_meta_alloc(
 	meta->fm_extent_type = fmh->ext_type;
 
 	switch (fmh->ext_type) {
-	case FUSE_FAMFS_EXT_SIMPLE: {
-		struct fuse_famfs_simple_ext *se_in;
+	case FUSE_DAX_EXT_SIMPLE: {
+		struct fuse_dax_simple_ext *se_in;
 
 		se_in = fmap_buf + next_offset;
 
@@ -438,7 +438,7 @@ famfs_fuse_meta_alloc(
 		if (!meta->se)
 			return -ENOMEM;
 
-		if ((meta->fm_nextents > FUSE_FAMFS_MAX_EXTENTS) ||
+		if ((meta->fm_nextents > FUSE_DAX_MAX_EXTENTS) ||
 		    (meta->fm_nextents < 1))
 			return -EINVAL;
 
@@ -457,9 +457,9 @@ famfs_fuse_meta_alloc(
 		break;
 	}
 
-	case FUSE_FAMFS_EXT_INTERLEAVE: {
+	case FUSE_DAX_EXT_INTERLEAVE: {
 		s64 size_remainder = meta->file_size;
-		struct fuse_famfs_iext *ie_in;
+		struct fuse_dax_iext *ie_in;
 		int niext = fmh->nextents;
 
 		meta->fm_niext = niext;
@@ -475,7 +475,7 @@ famfs_fuse_meta_alloc(
 		 */
 		for (i = 0; i < niext; i++) {
 			u64 nstrips;
-			struct fuse_famfs_simple_ext *sie_in;
+			struct fuse_dax_simple_ext *sie_in;
 
 			/* ie_in = one interleaved extent in fmap_buf */
 			ie_in = fmap_buf + next_offset;
@@ -518,10 +518,10 @@ famfs_fuse_meta_alloc(
 				return -EINVAL;
 			}
 
-			if ((nstrips > FUSE_FAMFS_MAX_STRIPS) || (nstrips < 1)) {
+			if ((nstrips > FUSE_DAX_MAX_STRIPS) || (nstrips < 1)) {
 				pr_err("%s: invalid nstrips=%lld (max=%d)\n",
 				       __func__, nstrips,
-				       FUSE_FAMFS_MAX_STRIPS);
+				       FUSE_DAX_MAX_STRIPS);
 				errs++;
 			}
 
