@@ -117,7 +117,7 @@ struct fuse_dax_meta_interleaved_ext {
 };
 
 /*
- * Each FUSE DAX file has this hanging from its fuse_inode->dax_fmap_meta
+ * Each FUSE DAX file has this hanging from its fuse_inode->dax_fmap.meta
  */
 struct fuse_dax_file_meta {
 	bool                   error;

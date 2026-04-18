@@ -122,7 +122,7 @@ static struct inode *fuse_alloc_inode(struct super_block *sb)
 		fuse_inode_backing_set(fi, NULL);
 
 	if (IS_ENABLED(CONFIG_FUSE_DAX_FMAP))
-		fuse_dax_fmap_meta_set(fi, NULL);
+		fuse_dax_fmap_init(fi);
 
 	return &fi->inode;
 

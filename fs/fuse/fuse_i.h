@@ -225,11 +225,12 @@ struct fuse_inode {
 	u8 cached_i_blkbits;
 
 #if IS_ENABLED(CONFIG_FUSE_DAX_FMAP)
-	/* Pointer to the file's DAX fmap metadata. Primary content is the
-	 * in-memory version of the fmap - the map from file's offset range
-	 * to DAX memory
-	 */
-	void *dax_fmap_meta;
+	struct {
+		struct fuse_dax_fmap_ops *ops; /* BPF struct_ops, or NULL */
+		void                    *meta;
+		u32                      meta_size;
+		u64                      file_size;
+	} dax_fmap;
 #endif
 };
 
@@ -1657,23 +1658,21 @@ void __fuse_dax_fmap_meta_free(void *map);
 
 void fuse_dax_fmap_teardown(struct fuse_conn *fc);
 
-/* Set fi->dax_fmap_meta = NULL regardless of prior value */
-static inline void fuse_dax_fmap_meta_init(struct fuse_inode *fi)
+static inline void fuse_dax_fmap_init(struct fuse_inode *fi)
 {
-	fi->dax_fmap_meta = NULL;
+	memset(&fi->dax_fmap, 0, sizeof(fi->dax_fmap));
 }
 
-/* Set fi->dax_fmap_meta iff the current value is NULL */
-static inline struct fuse_backing *fuse_dax_fmap_meta_set(struct fuse_inode *fi,
-						  void *meta)
+static inline void *fuse_dax_fmap_meta_set(struct fuse_inode *fi,
+					   void *meta)
 {
-	return cmpxchg(&fi->dax_fmap_meta, NULL, meta);
+	return cmpxchg(&fi->dax_fmap.meta, NULL, meta);
 }
 
 static inline void fuse_dax_fmap_meta_free(struct fuse_inode *fi)
 {
-	if (fi->dax_fmap_meta != NULL) {
-		__fuse_dax_fmap_meta_free(fi->dax_fmap_meta);
+	if (fi->dax_fmap.meta != NULL) {
+		__fuse_dax_fmap_meta_free(fi->dax_fmap.meta);
 		fuse_dax_fmap_meta_set(fi, NULL);
 	}
 }
@@ -1685,7 +1684,7 @@ static inline void fuse_dax_init_devlist_sem(struct fuse_conn *fc)
 
 static inline int fuse_file_dax_fmap(struct fuse_inode *fi)
 {
-	return (READ_ONCE(fi->dax_fmap_meta) != NULL);
+	return (READ_ONCE(fi->dax_fmap.meta) != NULL);
 }
 
 int fuse_dax_get_fmap(struct fuse_mount *fm, struct inode *inode);
@@ -1711,8 +1710,8 @@ static inline int fuse_dax_fmap_mmap(struct file *file,
 	return -ENODEV;
 }
 
-static inline struct fuse_backing *fuse_dax_fmap_meta_set(struct fuse_inode *fi,
-						  void *meta)
+static inline void *fuse_dax_fmap_meta_set(struct fuse_inode *fi,
+					   void *meta)
 {
 	return NULL;
 }

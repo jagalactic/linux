@@ -614,7 +614,7 @@ fuse_dax_fmap_file_init(
 	struct fuse_dax_file_meta *meta = NULL;
 	int rc;
 
-	if (fi->dax_fmap_meta) {
+	if (fi->dax_fmap.meta) {
 		pr_notice("%s: i_no=%ld fmap_size=%ld ALREADY INITIALIZED\n",
 			  __func__,
 			  inode->i_ino, fmap_size);
@@ -628,7 +628,7 @@ fuse_dax_fmap_file_init(
 	/* Make sure this fmap doesn't reference any unknown daxdevs */
 	fuse_dax_update_devtable(fm, meta);
 
-	/* Publish the DAX fmap metadata on fi->dax_fmap_meta */
+	/* Publish the DAX fmap metadata on fi->dax_fmap.meta */
 	inode_lock(inode);
 
 	if (fuse_dax_fmap_meta_set(fi, meta) == NULL) {
@@ -685,7 +685,7 @@ fuse_dax_interleave_fileofs_to_daxofs(struct inode *inode, struct iomap *iomap,
 			 loff_t file_offset, off_t len, unsigned int flags)
 {
 	struct fuse_inode *fi = get_fuse_inode(inode);
-	struct fuse_dax_file_meta *meta = fi->dax_fmap_meta;
+	struct fuse_dax_file_meta *meta = fi->dax_fmap.meta;
 	struct fuse_conn *fc = get_fuse_conn(inode);
 	loff_t local_offset = file_offset;
 
@@ -811,7 +811,7 @@ fuse_dax_fileofs_to_daxofs(struct inode *inode, struct iomap *iomap,
 			loff_t file_offset, off_t len, unsigned int flags)
 {
 	struct fuse_inode *fi = get_fuse_inode(inode);
-	struct fuse_dax_file_meta *meta = fi->dax_fmap_meta;
+	struct fuse_dax_file_meta *meta = fi->dax_fmap.meta;
 	struct fuse_conn *fc = get_fuse_conn(inode);
 	loff_t local_offset = file_offset;
 
@@ -931,7 +931,7 @@ fuse_dax_fmap_iomap_begin(struct inode *inode, loff_t offset, loff_t length,
 		  unsigned int flags, struct iomap *iomap, struct iomap *srcmap)
 {
 	struct fuse_inode *fi = get_fuse_inode(inode);
-	struct fuse_dax_file_meta *meta = fi->dax_fmap_meta;
+	struct fuse_dax_file_meta *meta = fi->dax_fmap.meta;
 	size_t size;
 
 	size = i_size_read(inode);
@@ -1029,7 +1029,7 @@ static int
 fuse_dax_file_bad(struct inode *inode)
 {
 	struct fuse_inode *fi = get_fuse_inode(inode);
-	struct fuse_dax_file_meta *meta = fi->dax_fmap_meta;
+	struct fuse_dax_file_meta *meta = fi->dax_fmap.meta;
 	size_t i_size = i_size_read(inode);
 
 	if (!meta) {
@@ -1144,7 +1144,7 @@ int fuse_dax_get_fmap(struct fuse_mount *fm, struct inode *inode)
 	FUSE_ARGS(args);
 
 	/* Don't retrieve if we already have the DAX fmap metadata */
-	if (fi->dax_fmap_meta)
+	if (fi->dax_fmap.meta)
 		return 0;
 
 	void *fmap_buf __free(kfree) = kzalloc(FMAP_BUFSIZE, GFP_KERNEL);
