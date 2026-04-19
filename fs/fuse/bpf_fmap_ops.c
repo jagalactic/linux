@@ -39,7 +39,7 @@ static int fuse_dax_fmap_ops_check_member(const struct btf_type *t,
 	u32 moff = __btf_member_bit_offset(t, member) / 8;
 
 	switch (moff) {
-	case offsetof(struct fuse_dax_fmap_ops, parse):
+	case offsetof(struct fuse_dax_fmap_ops, dax_fmap_parse):
 		break;
 	default:
 		if (prog->sleepable)
@@ -53,8 +53,6 @@ static int fuse_dax_fmap_ops_btf_struct_access(struct bpf_verifier_log *log,
 					       const struct bpf_reg_state *reg,
 					       int off, int size)
 {
-	const struct fuse_dax_fmap_parse_ctx *pctx;
-	const struct fuse_dax_fmap_resolve_ctx *rctx;
 	const struct btf_type *t;
 	s32 type_id;
 
@@ -64,19 +62,20 @@ static int fuse_dax_fmap_ops_btf_struct_access(struct bpf_verifier_log *log,
 					BTF_KIND_STRUCT);
 	if (type_id >= 0 && t == btf_type_by_id(reg->btf, type_id)) {
 		if (off >= offsetof(struct fuse_dax_fmap_parse_ctx, file_size) &&
-		    off + size <= offsetofend(struct fuse_dax_fmap_parse_ctx, n_devices))
+		    off + size <= offsetofend(struct fuse_dax_fmap_parse_ctx, dev_bitmap))
 			return NOT_INIT;
 		goto read_only;
 	}
 
 	type_id = btf_find_by_name_kind(reg->btf, "fuse_dax_fmap_resolve_ctx",
 					BTF_KIND_STRUCT);
-	if (type_id >= 0 && t == btf_type_by_id(reg->btf, type_id)) {
-		if (off >= offsetof(struct fuse_dax_fmap_resolve_ctx, dev_index) &&
-		    off + size <= offsetofend(struct fuse_dax_fmap_resolve_ctx, mapped_length))
-			return NOT_INIT;
+	if (type_id >= 0 && t == btf_type_by_id(reg->btf, type_id))
 		goto read_only;
-	}
+
+	type_id = btf_find_by_name_kind(reg->btf, "fuse_iomap_io",
+					BTF_KIND_STRUCT);
+	if (type_id >= 0 && t == btf_type_by_id(reg->btf, type_id))
+		return NOT_INIT;
 
 	bpf_log(log, "write access to this struct is not supported\n");
 	return -EACCES;
@@ -132,7 +131,7 @@ static int fuse_dax_fmap_ops_reg(void *kdata, struct bpf_link *link)
 	struct fuse_dax_fmap_ops *ops = kdata;
 	struct fuse_dax_fmap_ops_entry *entry;
 
-	if (!ops->parse || !ops->resolve)
+	if (!ops->dax_fmap_parse || !ops->iomap_begin)
 		return -EINVAL;
 
 	entry = kzalloc(sizeof(*entry), GFP_KERNEL);
@@ -167,11 +166,14 @@ static void fuse_dax_fmap_ops_unreg(void *kdata, struct bpf_link *link)
 /**
  * fuse_dax_fmap_ops_find - Look up registered ops by name
  * @name: ops name to find
+ * @linkp: out-param for bpf_link reference (caller must bpf_link_put)
  *
- * Returns a pointer to the ops on success (caller must call
- * fuse_dax_fmap_ops_put() when done), or NULL if not found.
+ * Returns a pointer to the ops on success, or NULL if not found.
+ * On success, *linkp holds an incremented bpf_link reference that
+ * the caller owns (typically stored on fuse_conn).
  */
-struct fuse_dax_fmap_ops *fuse_dax_fmap_ops_find(const char *name)
+struct fuse_dax_fmap_ops *fuse_dax_fmap_ops_find(const char *name,
+						 struct bpf_link **linkp)
 {
 	struct fuse_dax_fmap_ops_entry *entry;
 	struct fuse_dax_fmap_ops *ops = NULL;
@@ -182,6 +184,7 @@ struct fuse_dax_fmap_ops *fuse_dax_fmap_ops_find(const char *name)
 			     FUSE_DAX_FMAP_OPS_NAME_LEN)) {
 			bpf_link_inc(entry->link);
 			ops = entry->ops;
+			*linkp = entry->link;
 			break;
 		}
 	}
@@ -191,35 +194,21 @@ struct fuse_dax_fmap_ops *fuse_dax_fmap_ops_find(const char *name)
 }
 EXPORT_SYMBOL_GPL(fuse_dax_fmap_ops_find);
 
-void fuse_dax_fmap_ops_put(struct fuse_dax_fmap_ops *ops)
-{
-	struct fuse_dax_fmap_ops_entry *entry;
-
-	spin_lock(&fuse_dax_fmap_ops_lock);
-	list_for_each_entry(entry, &fuse_dax_fmap_ops_list, list) {
-		if (entry->ops == ops) {
-			bpf_link_put(entry->link);
-			break;
-		}
-	}
-	spin_unlock(&fuse_dax_fmap_ops_lock);
-}
-EXPORT_SYMBOL_GPL(fuse_dax_fmap_ops_put);
-
 /* CFI stubs */
 static int __fuse_dax_fmap_parse(struct fuse_dax_fmap_parse_ctx *ctx)
 {
 	return -EOPNOTSUPP;
 }
 
-static int __fuse_dax_fmap_resolve(struct fuse_dax_fmap_resolve_ctx *ctx)
+static int __fuse_dax_fmap_iomap_begin(struct fuse_dax_fmap_resolve_ctx *ctx,
+				       struct fuse_iomap_io *io)
 {
 	return -EOPNOTSUPP;
 }
 
 static struct fuse_dax_fmap_ops __bpf_fuse_dax_fmap_ops = {
-	.parse = __fuse_dax_fmap_parse,
-	.resolve = __fuse_dax_fmap_resolve,
+	.dax_fmap_parse = __fuse_dax_fmap_parse,
+	.iomap_begin = __fuse_dax_fmap_iomap_begin,
 };
 
 static struct bpf_struct_ops bpf_fuse_dax_fmap_ops = {
@@ -239,25 +228,25 @@ static struct bpf_struct_ops bpf_fuse_dax_fmap_ops = {
 __bpf_kfunc_start_defs();
 
 /**
- * bpf_fuse_dax_parse_get_xattr - Get read pointer to xattr blob
+ * bpf_fuse_dax_parse_get_blob - Get read pointer to GET_FMAP response blob
  * @ctx: parse context
- * @offset: byte offset into the xattr blob
+ * @offset: byte offset into the blob
  * @rdonly_buf_size: const size of the region to access
  *
- * Returns NULL if offset+size exceeds the xattr blob.
+ * Returns NULL if offset+size exceeds the blob.
  */
 __bpf_kfunc const __u8 *
-bpf_fuse_dax_parse_get_xattr(struct fuse_dax_fmap_parse_ctx *ctx,
-			     __u32 offset, const __u32 rdonly_buf_size)
+bpf_fuse_dax_parse_get_blob(struct fuse_dax_fmap_parse_ctx *ctx,
+			    __u32 offset, const __u32 rdonly_buf_size)
 {
 	struct fuse_dax_fmap_parse_ctx_kern *kctx;
 
 	kctx = container_of(ctx, struct fuse_dax_fmap_parse_ctx_kern, ctx);
 
-	if ((u64)offset + rdonly_buf_size > ctx->xattr_blob_size)
+	if ((u64)offset + rdonly_buf_size > ctx->blob_size)
 		return NULL;
 
-	return (const __u8 *)kctx->xattr_blob + offset;
+	return (const __u8 *)kctx->blob + offset;
 }
 
 /**
@@ -280,26 +269,6 @@ bpf_fuse_dax_parse_get_meta(struct fuse_dax_fmap_parse_ctx *ctx,
 		return NULL;
 
 	return (__u8 *)kctx->meta_buf + offset;
-}
-
-/**
- * bpf_fuse_dax_parse_get_devs - Get write pointer to device info array
- * @ctx: parse context
- * @index: device index (0-based)
- *
- * Returns NULL if index >= FUSE_DAX_FMAP_MAX_DEVS.
- */
-__bpf_kfunc struct fuse_dax_fmap_devinfo *
-bpf_fuse_dax_parse_get_devs(struct fuse_dax_fmap_parse_ctx *ctx, __u32 index)
-{
-	struct fuse_dax_fmap_parse_ctx_kern *kctx;
-
-	if (index >= FUSE_DAX_FMAP_MAX_DEVS)
-		return NULL;
-
-	kctx = container_of(ctx, struct fuse_dax_fmap_parse_ctx_kern, ctx);
-
-	return &kctx->devices[index];
 }
 
 /**
@@ -327,9 +296,8 @@ bpf_fuse_dax_resolve_get_meta(struct fuse_dax_fmap_resolve_ctx *ctx,
 __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(fuse_dax_fmap_kfunc_ids)
-BTF_ID_FLAGS(func, bpf_fuse_dax_parse_get_xattr, KF_RET_NULL)
+BTF_ID_FLAGS(func, bpf_fuse_dax_parse_get_blob, KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_fuse_dax_parse_get_meta, KF_RET_NULL)
-BTF_ID_FLAGS(func, bpf_fuse_dax_parse_get_devs, KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_fuse_dax_resolve_get_meta, KF_RET_NULL)
 BTF_KFUNCS_END(fuse_dax_fmap_kfunc_ids)
 

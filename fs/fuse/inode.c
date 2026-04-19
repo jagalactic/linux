@@ -11,7 +11,9 @@
 #include "dev_uring_i.h"
 
 #include <linux/bitfield.h>
+#include <linux/bpf.h>
 #include <linux/dax.h>
+#include <linux/fuse_dax_fmap_ops.h>
 #include <linux/pagemap.h>
 #include <linux/slab.h>
 #include <linux/file.h>
@@ -1480,9 +1482,23 @@ static void process_init_reply(struct fuse_mount *fm, struct fuse_args *args,
 				u64 in_flags = FIELD_PREP(GENMASK_ULL(63, 32), ia->in.flags2)
 						| ia->in.flags;
 
-				if (in_flags & FUSE_DAX_FMAP) {
-					fuse_dax_init_devlist_sem(fc);
-					fc->dax_fmap = 1;
+				if (in_flags & FUSE_DAX_FMAP &&
+				    arg->ops_name[0] != '\0') {
+					struct fuse_dax_fmap_ops *ops;
+					struct bpf_link *link = NULL;
+					char name[FUSE_DAX_FMAP_OPS_NAME_LEN];
+
+					memcpy(name, arg->ops_name,
+					       FUSE_DAX_FMAP_OPS_NAME_LEN);
+					name[FUSE_DAX_FMAP_OPS_NAME_LEN - 1] = '\0';
+
+					ops = fuse_dax_fmap_ops_find(name, &link);
+					if (ops) {
+						fuse_dax_init_devlist_sem(fc);
+						fc->dax_fmap_ops = ops;
+						fc->dax_fmap_link = link;
+						fc->dax_fmap = 1;
+					}
 				}
 			}
 		} else {

@@ -32,6 +32,8 @@
 #include <linux/refcount.h>
 #include <linux/user_namespace.h>
 
+struct bpf_link;
+
 /** Default max number of pages that can be used in a single read request */
 #define FUSE_DEFAULT_MAX_PAGES_PER_REQ 32
 
@@ -226,7 +228,6 @@ struct fuse_inode {
 
 #if IS_ENABLED(CONFIG_FUSE_DAX_FMAP)
 	struct {
-		struct fuse_dax_fmap_ops *ops; /* BPF struct_ops, or NULL */
 		void                    *meta;
 		u32                      meta_size;
 		u64                      file_size;
@@ -1011,6 +1012,8 @@ struct fuse_conn {
 #if IS_ENABLED(CONFIG_FUSE_DAX_FMAP)
 	struct rw_semaphore dax_devlist_sem;
 	struct fuse_dax_devlist *dax_devlist;
+	struct fuse_dax_fmap_ops *dax_fmap_ops;
+	struct bpf_link *dax_fmap_link;
 #endif
 };
 
@@ -1648,13 +1651,10 @@ extern void fuse_sysctl_unregister(void);
 /* fuse_dax_fmap.c */
 
 #if IS_ENABLED(CONFIG_FUSE_DAX_FMAP)
-int fuse_dax_fmap_file_init(struct fuse_mount *fm,
-			struct inode *inode, void *fmap_buf,
-			size_t fmap_size);
 ssize_t fuse_dax_fmap_write_iter(struct kiocb *iocb, struct iov_iter *from);
 ssize_t fuse_dax_fmap_read_iter(struct kiocb *iocb, struct iov_iter	*to);
 int fuse_dax_fmap_mmap(struct file *file, struct vm_area_struct *vma);
-void __fuse_dax_fmap_meta_free(void *map);
+void __fuse_dax_fmap_meta_free(struct fuse_inode *fi);
 
 void fuse_dax_fmap_teardown(struct fuse_conn *fc);
 
@@ -1663,18 +1663,10 @@ static inline void fuse_dax_fmap_init(struct fuse_inode *fi)
 	memset(&fi->dax_fmap, 0, sizeof(fi->dax_fmap));
 }
 
-static inline void *fuse_dax_fmap_meta_set(struct fuse_inode *fi,
-					   void *meta)
-{
-	return cmpxchg(&fi->dax_fmap.meta, NULL, meta);
-}
-
 static inline void fuse_dax_fmap_meta_free(struct fuse_inode *fi)
 {
-	if (fi->dax_fmap.meta != NULL) {
-		__fuse_dax_fmap_meta_free(fi->dax_fmap.meta);
-		fuse_dax_fmap_meta_set(fi, NULL);
-	}
+	if (fi->dax_fmap.meta != NULL)
+		__fuse_dax_fmap_meta_free(fi);
 }
 
 static inline void fuse_dax_init_devlist_sem(struct fuse_conn *fc)
@@ -1687,7 +1679,7 @@ static inline int fuse_file_dax_fmap(struct fuse_inode *fi)
 	return (READ_ONCE(fi->dax_fmap.meta) != NULL);
 }
 
-int fuse_dax_get_fmap(struct fuse_mount *fm, struct inode *inode);
+int fuse_dax_fmap_open(struct fuse_mount *fm, struct inode *inode);
 
 #else /* !CONFIG_FUSE_DAX_FMAP */
 
@@ -1710,12 +1702,6 @@ static inline int fuse_dax_fmap_mmap(struct file *file,
 	return -ENODEV;
 }
 
-static inline void *fuse_dax_fmap_meta_set(struct fuse_inode *fi,
-					   void *meta)
-{
-	return NULL;
-}
-
 static inline void fuse_dax_fmap_meta_free(struct fuse_inode *fi)
 {
 }
@@ -1730,7 +1716,7 @@ static inline int fuse_file_dax_fmap(struct fuse_inode *fi)
 }
 
 static inline int
-fuse_dax_get_fmap(struct fuse_mount *fm, struct inode *inode)
+fuse_dax_fmap_open(struct fuse_mount *fm, struct inode *inode)
 {
 	return 0;
 }
