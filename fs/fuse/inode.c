@@ -1471,14 +1471,6 @@ static void process_init_reply(struct fuse_mount *fm, struct fuse_args *args,
 
 			if (IS_ENABLED(CONFIG_FUSE_DAX_FMAP) &&
 			    flags & FUSE_DAX_FMAP) {
-				/* dax_fmap is only allowed if the fuse
-				 * server has CAP_SYS_RAWIO. This was checked
-				 * in fuse_send_init, and FUSE_DAX_IOMAP was
-				 * set in in_flags if so. Only allow enablement
-				 * if we find it there. This function is
-				 * normally not running in fuse server context,
-				 * so we can't do the capability check here...
-				 */
 				u64 in_flags = FIELD_PREP(GENMASK_ULL(63, 32), ia->in.flags2)
 						| ia->in.flags;
 
@@ -1498,6 +1490,8 @@ static void process_init_reply(struct fuse_mount *fm, struct fuse_args *args,
 						fc->dax_fmap_ops = ops;
 						fc->dax_fmap_link = link;
 						fc->dax_fmap = 1;
+					} else {
+						pr_warn("fuse: dax_fmap_ops '%s' not found\n", name);
 					}
 				}
 			}
