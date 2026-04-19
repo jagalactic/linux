@@ -242,17 +242,10 @@
  *  - add FUSE_NOTIFY_PRUNE
  *
  *  7.46
- *  - Add FUSE_DAX_FMAP capability - ability to handle in-kernel fsdax maps
- *  - Add the following structures for the GET_FMAP message reply components:
- *    - struct fuse_dax_simple_ext
- *    - struct fuse_dax_iext
- *    - struct fuse_dax_fmap_header
- *  - Add the following structs for the GET_DAXDEV message and reply
- *    - struct fuse_get_daxdev_in
- *    - struct fuse_get_daxdev_out
- *  - Add the following enumerated types
- *    - enum fuse_dax_file_type
- *    - enum fuse_dax_ext_type
+ *  - Add FUSE_DAX_FMAP capability for in-kernel fsdax maps via BPF struct_ops
+ *  - Add FUSE_GET_FMAP and FUSE_GET_DAXDEV opcodes
+ *  - Add ops_name field to fuse_init_out for BPF struct_ops negotiation
+ *  - Add struct fuse_get_fmap_out, fuse_get_daxdev_in, fuse_get_daxdev_out
  */
 
 #ifndef _LINUX_FUSE_H
@@ -288,7 +281,7 @@
 #define FUSE_KERNEL_VERSION 7
 
 /** Minor version number of this interface */
-#define FUSE_KERNEL_MINOR_VERSION 45
+#define FUSE_KERNEL_MINOR_VERSION 46
 
 /** The node ID of the root inode */
 #define FUSE_ROOT_ID 1
@@ -678,10 +671,8 @@ enum fuse_opcode {
 	FUSE_TMPFILE		= 51,
 	FUSE_STATX		= 52,
 	FUSE_COPY_FILE_RANGE_64	= 53,
-
-	/* FUSE DAX fmap opcodes */
-	FUSE_GET_FMAP           = 54,
-	FUSE_GET_DAXDEV         = 55,
+	FUSE_GET_FMAP		= 54,
+	FUSE_GET_DAXDEV		= 55,
 
 	/* CUSE specific operations */
 	CUSE_INIT		= 4096,
@@ -944,7 +935,8 @@ struct fuse_init_out {
 	uint32_t	flags2;
 	uint32_t	max_stack_depth;
 	uint16_t	request_timeout;
-	uint16_t	unused[11];
+	uint16_t	unused[3];
+	char		ops_name[16];
 };
 
 #define CUSE_INIT_INFO_MAX 4096
@@ -1327,73 +1319,20 @@ struct fuse_uring_cmd_req {
 	uint8_t padding[6];
 };
 
-/* FUSE DAX fmap message components */
+/* FUSE DAX fmap opcodes */
 
-#define FUSE_DAX_FMAP_VERSION 1
-
-#define FUSE_DAX_FMAP_MAX 32768 /* Largest supported fmap message */
-#define FUSE_DAX_MAX_EXTENTS 32
-#define FUSE_DAX_MAX_STRIPS 32
-
-enum fuse_dax_file_type {
-	FUSE_DAX_FILE_REG,
-	FUSE_DAX_FILE_SUPERBLOCK,
-	FUSE_DAX_FILE_LOG,
-};
-
-enum fuse_dax_ext_type {
-	FUSE_DAX_EXT_SIMPLE = 0,
-	FUSE_DAX_EXT_INTERLEAVE = 1,
-};
-
-struct fuse_dax_simple_ext {
-	uint32_t se_devindex;
-	uint32_t reserved;
-	uint64_t se_offset;
-	uint64_t se_len;
-};
-
-struct fuse_dax_iext { /* Interleaved extent */
-	uint32_t ie_nstrips;
-	uint32_t ie_chunk_size;
-	uint64_t ie_nbytes; /* Total bytes for this interleaved_ext;
-			     * sum of strips may be more
-			     */
-	uint64_t reserved;
-};
-
-struct fuse_dax_fmap_header {
-	uint8_t file_type; /* enum fuse_dax_file_type */
-	uint8_t reserved;
-	uint16_t fmap_version;
-	uint32_t ext_type; /* enum fuse_dax_ext_type */
-	uint32_t nextents;
-	uint32_t reserved0;
-	uint64_t file_size;
-	uint64_t reserved1;
+struct fuse_get_fmap_out {
+	uint32_t	meta_size;
+	uint32_t	reserved;
 };
 
 struct fuse_get_daxdev_in {
-	uint32_t        daxdev_num;
+	uint32_t	daxdev_index;
+	uint32_t	reserved;
 };
 
-#define DAXDEV_NAME_MAX 256
-
-/* fuse_daxdev_out has enough space for a uuid if we need it */
-struct fuse_daxdev_out {
-	uint16_t index;
-	uint16_t reserved;
-	uint32_t reserved2;
-	uint64_t reserved3;
-	uint64_t reserved4;
-	char name[DAXDEV_NAME_MAX];
+struct fuse_get_daxdev_out {
+	char		name[256];
 };
-
-static inline int32_t fmap_msg_min_size(void)
-{
-	/* Smallest fmap message is a header plus one simple extent */
-	return (sizeof(struct fuse_dax_fmap_header)
-		+ sizeof(struct fuse_dax_simple_ext));
-}
 
 #endif /* _LINUX_FUSE_H */

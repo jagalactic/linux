@@ -6,63 +6,61 @@
 
 #define FUSE_DAX_FMAP_OPS_NAME_LEN 16
 #define FUSE_DAX_FMAP_META_MAX (64 * 1024)
-#define FUSE_DAX_FMAP_MAX_DEVS 24
 
-struct fuse_dax_fmap_devinfo {
+struct fuse_iomap_io {
+	__u64 offset;
+	__u64 length;
+	__u64 addr;
+	__u16 type;
+	__u16 flags;
 	__u32 dev_index;
-	__u32 reserved;
-	char name[256];
 };
 
 /*
- * Context passed to the BPF parse() callback at file open time.
+ * Context passed to the BPF dax_fmap_parse() callback at file open time.
  * Process context, sleepable. Called once per file open.
  *
- * The raw xattr blob and meta_buf are NOT directly accessible as
- * pointer fields. BPF programs use kfuncs to get bounded pointers:
- *   bpf_fuse_dax_parse_get_xattr() - read the xattr blob
- *   bpf_fuse_dax_parse_get_meta()  - write the metadata buffer
- *   bpf_fuse_dax_parse_get_devs()  - write the device info array
+ * The raw GET_FMAP response blob and meta_buf are NOT directly accessible
+ * as pointer fields. BPF programs use kfuncs to get bounded pointers:
+ *   bpf_fuse_dax_parse_get_blob() - read the GET_FMAP response blob
+ *   bpf_fuse_dax_parse_get_meta() - write the metadata buffer
  *
  * Scalar OUT fields are written directly by the BPF program.
  */
 struct fuse_dax_fmap_parse_ctx {
-	__u32 xattr_blob_size;
+	__u32 blob_size;
 	__u32 meta_buf_size;
 	__u64 file_size;		/* OUT: file size from fmap */
 	__u64 dev_bitmap;		/* OUT: bitmap of referenced dev indices */
-	__u32 n_devices;		/* OUT: number of devices populated */
 };
 
 /*
- * Context passed to the BPF resolve() callback at iomap_begin time.
+ * Context passed to the BPF iomap_begin() callback at iomap_begin time.
  * Non-sleepable, hot path. Called on every page fault / IO.
+ *
+ * All fields are INPUT-only. Output goes to struct fuse_iomap_io.
  *
  * The meta_buf is accessed via kfunc:
  *   bpf_fuse_dax_resolve_get_meta() - read the metadata buffer
- *
- * Scalar OUT fields are written directly by the BPF program.
  */
 struct fuse_dax_fmap_resolve_ctx {
 	__u32 meta_buf_size;
 	__u64 file_offset;
 	__u64 length;
 	__u64 file_size;
-	__u32 dev_index;		/* OUT: index into daxdev table */
-	__u64 phys_offset;		/* OUT: byte offset on the device */
-	__u64 mapped_length;		/* OUT: bytes mapped from phys_offset */
 };
 
 /*
  * BPF struct_ops for FUSE DAX fmap extent resolution.
  *
- * parse() is called at file open in process context (sleepable).
- * resolve() is called at iomap_begin in fault context (non-sleepable).
+ * dax_fmap_parse() is called at file open in process context (sleepable).
+ * iomap_begin() is called at iomap_begin in fault context (non-sleepable).
  */
 struct fuse_dax_fmap_ops {
 	char name[FUSE_DAX_FMAP_OPS_NAME_LEN];
-	int (*parse)(struct fuse_dax_fmap_parse_ctx *ctx);
-	int (*resolve)(struct fuse_dax_fmap_resolve_ctx *ctx);
+	int (*dax_fmap_parse)(struct fuse_dax_fmap_parse_ctx *ctx);
+	int (*iomap_begin)(struct fuse_dax_fmap_resolve_ctx *ctx,
+			   struct fuse_iomap_io *io);
 };
 
 /*
@@ -73,14 +71,26 @@ struct fuse_dax_fmap_ops {
  */
 struct fuse_dax_fmap_parse_ctx_kern {
 	struct fuse_dax_fmap_parse_ctx ctx;
-	const void *xattr_blob;
+	const void *blob;
 	void *meta_buf;
-	struct fuse_dax_fmap_devinfo *devices;
 };
 
 struct fuse_dax_fmap_resolve_ctx_kern {
 	struct fuse_dax_fmap_resolve_ctx ctx;
 	const void *meta_buf;
 };
+
+#if IS_ENABLED(CONFIG_FUSE_DAX_FMAP_BPF)
+struct bpf_link;
+struct fuse_dax_fmap_ops *fuse_dax_fmap_ops_find(const char *name,
+						 struct bpf_link **linkp);
+#else
+static inline
+struct fuse_dax_fmap_ops *fuse_dax_fmap_ops_find(const char *name,
+						 struct bpf_link **linkp)
+{
+	return NULL;
+}
+#endif
 
 #endif /* _LINUX_FUSE_DAX_FMAP_OPS_H */
