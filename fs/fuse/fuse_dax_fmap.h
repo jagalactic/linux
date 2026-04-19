@@ -33,4 +33,11 @@ struct fuse_dax_devlist {
 	struct fuse_daxdev *devlist;
 };
 
+
+#ifdef CONFIG_FUSE_DAX_FMAP_BPF
+int __init fuse_dax_fmap_struct_ops_init(void);
+#else
+static inline int fuse_dax_fmap_struct_ops_init(void) { return 0; }
+#endif
+
 #endif /* FUSE_DAX_FMAP_H */

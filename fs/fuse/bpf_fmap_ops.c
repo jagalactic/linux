@@ -15,6 +15,7 @@
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/fuse_dax_fmap_ops.h>
+#include "fuse_dax_fmap.h"
 
 static struct btf *fuse_dax_fmap_ops_btf;
 
@@ -306,7 +307,7 @@ static const struct btf_kfunc_id_set fuse_dax_fmap_kfunc_set = {
 	.set = &fuse_dax_fmap_kfunc_ids,
 };
 
-static int __init fuse_dax_fmap_struct_ops_init(void)
+int __init fuse_dax_fmap_struct_ops_init(void)
 {
 	int ret;
 
@@ -318,4 +319,3 @@ static int __init fuse_dax_fmap_struct_ops_init(void)
 	return register_bpf_struct_ops(&bpf_fuse_dax_fmap_ops,
 				       fuse_dax_fmap_ops);
 }
-late_initcall(fuse_dax_fmap_struct_ops_init);

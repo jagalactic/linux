@@ -30,6 +30,7 @@
 #include <linux/posix_acl.h>
 #include <linux/pid_namespace.h>
 #include <uapi/linux/magic.h>
+#include "fuse_dax_fmap.h"
 
 MODULE_AUTHOR("Miklos Szeredi <miklos@szeredi.hu>");
 MODULE_DESCRIPTION("Filesystem in Userspace");
@@ -2331,6 +2332,10 @@ static int __init fuse_init(void)
 
 	sanitize_global_limit(&max_user_bgreq);
 	sanitize_global_limit(&max_user_congthresh);
+
+	res = fuse_dax_fmap_struct_ops_init();
+	if (res)
+		goto err_sysfs_cleanup;
 
 	return 0;
 
