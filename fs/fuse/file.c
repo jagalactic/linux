@@ -280,7 +280,7 @@ static int fuse_open(struct inode *inode, struct file *file)
 
 		if ((fm->fc->dax_fmap) && (S_ISREG(inode->i_mode))) {
 			/* Get the DAX fmap - failure is fatal */
-			err = fuse_dax_get_fmap(fm, inode);
+			err = fuse_dax_fmap_open(fm, inode);
 			if (err) {
 				fuse_sync_release(fi, ff, file->f_flags);
 				goto out_nowrite;
