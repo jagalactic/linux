@@ -3,7 +3,7 @@
 .. _famfs_index:
 
 ==================================================================
-famfs: The fabric-attached memory file system
+FUSE DAX fmap: Direct memory access for FUSE filesystems
 ==================================================================
 
 - Copyright (C) 2024-2026 Micron Technology, Inc.
@@ -15,128 +15,206 @@ fabric-attached memory (FAM). This creates opportunities for data sharing;
 clustered apps that would otherwise have to shard or replicate data can
 share one copy in disaggregated memory.
 
-Famfs, which is not CXL-specific in any way, provides a mechanism for
-multiple hosts to concurrently access data in shared memory, by giving it
-a file system interface. With famfs, any app that understands files can
-access data sets in shared memory. Although famfs supports read and write,
-the real point is to support mmap, which provides direct (dax) access to
-the memory - either writable or read-only.
+The FUSE DAX fmap infrastructure provides a mechanism for FUSE
+filesystems (such as famfs) to map files directly onto devdax memory,
+allowing read, write, and mmap access with no page cache involvement.
+The CPU cache is loaded directly from the backing memory, providing
+direct access (DAX) semantics.
 
-Shared memory can pose complex coherency and synchronization issues, but
-there are also simple cases. Two simple and eminently useful patterns that
-occur frequently in data analytics and AI are:
+Architecture
+============
 
-* Serial Sharing - Only one host or process at a time has access to a file
-* Read-only Sharing - Multiple hosts or processes share read-only access
-  to a file
+FUSE DAX fmap uses a BPF struct_ops architecture for extent resolution.
+The kernel understands no extent formats natively — all parsing and
+resolution is handled by BPF programs that are registered as struct_ops
+implementations.
 
-The famfs fuse file system is part of the famfs framework; user space
-components [1] handle metadata allocation and distribution, and provide a
-low-level fuse server to expose files that map directly to [presumably
-shared] memory.
+Metadata Delivery
+-----------------
 
-The famfs framework manages coherency of its own metadata and structures,
-but does not attempt to manage coherency for applications.
+File mapping metadata is delivered via two FUSE opcodes:
 
-Famfs also provides data isolation between files. That is, even though
-the host has access to an entire memory "device" (as a devdax device), apps
-cannot write to memory for which the file is read-only, and mapping one
-file provides isolation from the memory of all other files. This is pretty
-basic, but some experimental shared memory usage patterns provide no such
-isolation.
+**FUSE_GET_FMAP** (opcode 54) — sent by the kernel on file open.
+The server responds with a ``fuse_get_fmap_out`` header followed by an
+opaque blob::
 
-Principles of Operation
-=======================
+    struct fuse_get_fmap_out {
+        uint32_t meta_size;  /* BPF metadata buffer size to allocate */
+        uint32_t reserved;
+    };
+    /* Remaining bytes are opaque — passed to BPF dax_fmap_parse() */
 
-Famfs is a file system with one or more devdax devices as a first-class
-backing device(s). Metadata maintenance and query operations happen
-entirely in user space.
+The ``meta_size`` field tells the kernel how large a metadata buffer to
+allocate for the BPF program to populate. The blob format is defined
+entirely by the BPF program — the kernel treats it as opaque.
 
-The famfs low-level fuse server daemon provides file maps (fmaps) and
-devdax device info to the fuse/famfs kernel component so that
-read/write/mapping faults can be handled without up-calls for all active
-files.
+**FUSE_GET_DAXDEV** (opcode 55) — sent after parse to resolve device
+paths. The kernel sends a ``fuse_get_daxdev_in`` with the device index
+and receives a ``fuse_get_daxdev_out`` with the device path::
 
-The famfs user space is responsible for maintaining and distributing
-consistent metadata. This is currently handled via an append-only
-metadata log within the memory, but this is orthogonal to the fuse/famfs
-kernel code.
+    struct fuse_get_daxdev_in {
+        uint32_t daxdev_index;
+        uint32_t reserved;
+    };
 
-Once instantiated, "the same file" on each host points to the same shared
-memory, but in-memory metadata (inodes, etc.) is ephemeral on each host
-that has a famfs instance mounted. Use cases are free to allow or not
-allow mutations to data on a file-by-file basis.
+    struct fuse_get_daxdev_out {
+        char name[256];  /* e.g., "/dev/dax0.0" */
+    };
 
-When an app accesses a data object in a famfs file, there is no page cache
-involvement. The CPU cache is loaded directly from the shared memory. In
-some use cases, this is an enormous reduction in read amplification
-compared to loading an entire page into the page cache.
+FUSE_INIT Negotiation
+---------------------
 
+The BPF struct_ops program name is communicated during FUSE_INIT. The
+server sets the ``ops_name`` field in ``fuse_init_out`` to identify which
+BPF program should interpret its blobs (e.g., ``"dax_simple"``).
 
-Famfs is Not a Conventional File System
----------------------------------------
+On INIT reply, the kernel looks up the named BPF struct_ops and pins
+both the ops pointer and its ``bpf_link`` on ``fuse_conn``. If the
+named BPF program is not loaded, DAX fmap is not negotiated and the
+mount proceeds without DAX support.
 
-Famfs files can be accessed by conventional means, but there are
-limitations. The kernel component of fuse/famfs is not involved in the
-allocation of backing memory for files at all; the famfs user space
-creates files and responds as a low-level fuse server with fmaps and
-devdax device info upon request.
+The BPF program cannot be unloaded while the filesystem is mounted —
+the ``bpf_link`` reference on ``fuse_conn`` prevents it. The link is
+released during ``fuse_dax_fmap_teardown()`` at unmount.
 
-Famfs differs in some important ways from conventional file systems:
+BPF struct_ops Interface
+------------------------
 
-* Files must be pre-allocated by the famfs framework; allocation is never
-  performed on (or after) write.
-* Any operation that changes a file's size is considered to put the file
-  in an invalid state, disabling access to the data. It may be possible to
-  revisit this in the future. (Typically the famfs user space can restore
-  files to a valid state by replaying the famfs metadata log.)
+BPF programs implement the ``fuse_dax_fmap_ops`` interface::
 
-Famfs exists to apply the existing file system abstractions to shared
-memory so applications and workflows can more easily adapt to an
-environment with disaggregated shared memory.
+    struct fuse_dax_fmap_ops {
+        char name[16];
+        int (*dax_fmap_parse)(struct fuse_dax_fmap_parse_ctx *ctx);
+        int (*iomap_begin)(struct fuse_dax_fmap_resolve_ctx *ctx,
+                           struct fuse_iomap_io *io);
+    };
+
+**dax_fmap_parse()** — called once per file open in process context
+(sleepable). Reads the opaque GET_FMAP blob, populates a metadata
+buffer for later use by iomap_begin(), and sets a device bitmap
+indicating which devices need to be resolved. Uses kfuncs:
+
+- ``bpf_fuse_dax_parse_get_blob(ctx, offset, size)`` — read GET_FMAP blob
+- ``bpf_fuse_dax_parse_get_meta(ctx, offset, size)`` — write metadata buffer
+
+Sets output fields on the parse context: ``file_size``, ``dev_bitmap``.
+
+**iomap_begin()** — called on every page fault and I/O in fault context
+(non-sleepable, hot path). Translates a file offset to a physical
+device offset using the metadata buffer populated by dax_fmap_parse().
+Uses:
+
+- ``bpf_fuse_dax_resolve_get_meta(ctx, offset, size)`` — read metadata buffer
+
+Writes output to ``struct fuse_iomap_io``::
+
+    struct fuse_iomap_io {
+        __u64 offset;    /* file offset */
+        __u64 length;    /* mapped length */
+        __u64 addr;      /* physical address on device */
+        __u16 type;      /* IOMAP_MAPPED, etc. */
+        __u16 flags;     /* IOMAP_F_* flags */
+        __u32 dev_index; /* index into connection device list */
+    };
+
+Data Flow
+---------
+
+File open (cold path)::
+
+    FUSE_GET_FMAP(nodeid)
+    → read fuse_get_fmap_out header (meta_size) + opaque blob
+    → allocate metadata buffer (meta_size bytes)
+    → BPF ops->dax_fmap_parse(parse_ctx)
+    → iterate dev_bitmap bits
+    → for each uncached device: FUSE_GET_DAXDEV(index) → resolve path
+    → store {meta, meta_size, file_size} on inode
+    → set S_DAX flag
+
+Page fault / I/O (hot path)::
+
+    iomap_begin(inode, offset, length, ...)
+    → BPF ops->iomap_begin(resolve_ctx, &io)
+    → validate io.dev_index, look up daxdev
+    → fill iomap struct with {addr, length, dax_dev}
+
+Device Resolution
+-----------------
+
+Device indices are communicated by BPF dax_fmap_parse() programs through
+the ``dev_bitmap`` output field. For each set bit, the kernel sends a
+FUSE_GET_DAXDEV request to the server, which responds with the device
+path (e.g., ``/dev/dax0.0``). The kernel resolves each path to a
+``dax_device`` pointer via ``kern_path()`` + ``dax_dev_get()``
++ ``fs_dax_get()``. Resolved devices are cached on the ``fuse_conn``
+for the lifetime of the connection.
+
+Reference BPF Programs
+======================
+
+Two reference BPF struct_ops implementations are provided:
+
+**dax_simple** (``tools/testing/selftests/bpf/progs/fuse_dax_simple.bpf.c``)
+  Linear extent list. Each extent is a ``(dev_index, offset, length)``
+  tuple. Resolution is O(n) in the number of extents.
+
+**dax_interleave** (``tools/testing/selftests/bpf/progs/fuse_dax_interleave.bpf.c``)
+  Striped (RAID-0 style) extents. Data is distributed in round-robin
+  fashion across strips, where each strip is a contiguous allocation on
+  a dax device. Resolution is O(1) within a single interleaved extent
+  via chunk/strip/stripe arithmetic.
+
+Interleaved Extent Layout
+--------------------------
+
+An interleaved extent stripes data across a collection of strips::
+
+    chunk_size = 2 MiB, nstrips = 4, nbytes = 24 MiB
+
+    ┌────────────┐────────────┐────────────┐────────────┐
+    │Chunk 0     │Chunk 1     │Chunk 2     │Chunk 3     │
+    │Strip 0     │Strip 1     │Strip 2     │Strip 3     │
+    │Stripe 0    │Stripe 0    │Stripe 0    │Stripe 0    │
+    └────────────┘────────────┘────────────┘────────────┘
+    │Chunk 4     │Chunk 5     │Chunk 6     │Chunk 7     │
+    │Strip 0     │Strip 1     │Strip 2     │Strip 3     │
+    │Stripe 1    │Stripe 1    │Stripe 1    │Stripe 1    │
+    └────────────┘────────────┘────────────┘────────────┘
+    │Chunk 8     │Chunk 9     │Chunk 10    │Chunk 11    │
+    │Strip 0     │Strip 1     │Strip 2     │Strip 3     │
+    │Stripe 2    │Stripe 2    │Stripe 2    │Stripe 2    │
+    └────────────┘────────────┘────────────┘────────────┘
+
+Resolution arithmetic for offset within an interleaved extent::
+
+    chunk_num    = offset / chunk_size
+    chunk_offset = offset % chunk_size
+    strip_num    = chunk_num % nstrips
+    stripe_num   = chunk_num / nstrips
+    strip_offset = chunk_offset + stripe_num * chunk_size
+    device_offset = strip[strip_num].offset + strip_offset
 
 Memory Error Handling
 =====================
 
 Possible memory errors include timeouts, poison, and unexpected
-reconfiguration of an underlying dax device. In all of these cases, famfs
-receives a call from the devdax layer via its iomap_ops->notify_failure()
-function. If any memory errors have been detected, access to the affected
-daxdev is disabled to avoid further errors or corruption.
+reconfiguration of an underlying dax device. In all of these cases, the
+kernel receives a call from the devdax layer via the DAX holder
+``notify_failure()`` callback. If any memory errors have been detected,
+access to the affected daxdev is disabled to avoid further errors or
+corruption.
 
-In all known cases, famfs can be unmounted cleanly. In most cases errors
-can be cleared by re-initializing the memory - at which point a new famfs
-file system can be created.
+Configuration
+=============
 
-Key Requirements
-================
+The FUSE DAX fmap infrastructure requires::
 
-The primary requirements for famfs are:
-
-1. Must support a file system abstraction backed by sharable devdax memory
-2. Files must efficiently handle VMA faults
-3. Must support metadata distribution in a sharable way
-4. Must handle clients with a stale copy of metadata
-
-The famfs kernel component takes care of 1-2 above by caching each file's
-mapping metadata in the kernel.
-
-Requirements 3 and 4 are handled by the user space components, and are
-largely orthogonal to the functionality of the famfs kernel module.
-
-Requirements 3 and 4 cannot be met by conventional fs-dax file systems
-(e.g. xfs) because they use write-back metadata; it is not valid to mount
-such a file system on two hosts from the same in-memory image.
-
-
-Famfs Usage
-===========
-
-Famfs usage is documented at [1].
-
+    CONFIG_FUSE_DAX_FMAP=y    # Core fmap support
+    CONFIG_FUSE_DAX_FMAP_BPF=y  # BPF struct_ops for extent resolution
+    CONFIG_DEV_DAX_FSDEV=y    # fs-dax compatible devdax driver
 
 References
 ==========
 
-- [1] Famfs user space repository and documentation
-      https://github.com/cxl-micron-reskit/famfs
+- Famfs user space repository and documentation:
+  https://github.com/cxl-micron-reskit/famfs
