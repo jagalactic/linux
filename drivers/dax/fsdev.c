@@ -216,11 +216,123 @@ static int fsdev_release(struct inode *inode, struct file *filp)
 	return 0;
 }
 
+/*
+ * Raw read()/write() support for a famfs-mode (fsdev) dax device.
+ *
+ * device_dax (drivers/dax/device.c) exposes its memory only through mmap.
+ * In famfs mode the folios are left order-0 and uninitialized -- which is
+ * what fs-dax wants, but is incompatible with the device_dax fault path, so
+ * mmap is not offered here. Raw read()/write() on the chardev gives a simple
+ * byte-addressable path to the same memory: for each chunk we use
+ * dax_direct_access() to obtain a kernel-virtual mapping and copy to/from the
+ * caller's iov_iter, holding dax_read_lock() so the device cannot be torn
+ * down while the mapping is in use.
+ */
+static ssize_t fsdev_dax_rw_iter(struct kiocb *iocb, struct iov_iter *iter,
+				 bool write)
+{
+	struct dev_dax *dev_dax = iocb->ki_filp->private_data;
+	struct dax_device *dax_dev = dev_dax->dax_dev;
+	loff_t size = dev_dax->cached_size;
+	loff_t pos = iocb->ki_pos;
+	ssize_t done = 0;
+
+	if (pos < 0)
+		return -EINVAL;
+	if (pos >= size)
+		return write ? -ENOSPC : 0;
+
+	/* Never run past the end of the device. */
+	iov_iter_truncate(iter, size - pos);
+
+	while (iov_iter_count(iter)) {
+		pgoff_t pgoff = pos >> PAGE_SHIFT;
+		size_t off = offset_in_page(pos);
+		size_t count = iov_iter_count(iter);
+		long nr_pages = DIV_ROUND_UP(off + count, PAGE_SIZE);
+		size_t map_len, xfer;
+		void *kaddr;
+		long avail;
+		int id;
+
+		id = dax_read_lock();
+		avail = dax_direct_access(dax_dev, pgoff, nr_pages, DAX_ACCESS,
+					  &kaddr, NULL);
+		/*
+		 * fsdev's direct_access rejects a request that straddles a gap
+		 * between physical ranges (dax_pgoff_to_phys() requires the
+		 * whole request to land in one range). Fall back to a single
+		 * page so the copy can step across the boundary one page at a
+		 * time; the next iteration resumes the larger mapping.
+		 */
+		if (avail == -EFAULT && nr_pages > 1)
+			avail = dax_direct_access(dax_dev, pgoff, 1, DAX_ACCESS,
+						  &kaddr, NULL);
+		if (avail < 0) {
+			dax_read_unlock(id);
+			if (!done)
+				done = avail;
+			break;
+		}
+
+		map_len = ((size_t)avail << PAGE_SHIFT) - off;
+		map_len = min(map_len, count);
+
+		if (write)
+			xfer = _copy_from_iter_flushcache(kaddr + off, map_len,
+							  iter);
+		else
+			xfer = copy_to_iter(kaddr + off, map_len, iter);
+		dax_read_unlock(id);
+
+		pos += xfer;
+		done += xfer;
+		if (xfer < map_len) {
+			if (!done)
+				done = -EFAULT;
+			break;
+		}
+	}
+
+	if (write && done > 0) {
+		/*
+		 * _copy_from_iter_flushcache() uses non-temporal stores; this
+		 * write barrier makes them globally visible -- to a subsequent
+		 * read of this device, or to another famfs node sharing the
+		 * memory -- before we report completion. Ordering only; not a
+		 * substitute for the durability fencing an fsync path would do.
+		 */
+		wmb();
+	}
+
+	iocb->ki_pos = pos;
+	return done;
+}
+
+static ssize_t fsdev_dax_read_iter(struct kiocb *iocb, struct iov_iter *to)
+{
+	return fsdev_dax_rw_iter(iocb, to, false);
+}
+
+static ssize_t fsdev_dax_write_iter(struct kiocb *iocb, struct iov_iter *from)
+{
+	return fsdev_dax_rw_iter(iocb, from, true);
+}
+
+static loff_t fsdev_llseek(struct file *filp, loff_t offset, int whence)
+{
+	struct dev_dax *dev_dax = filp->private_data;
+
+	return fixed_size_llseek(filp, offset, whence, dev_dax->cached_size);
+}
+
 static const struct file_operations fsdev_fops = {
-	.llseek = noop_llseek,
+	.llseek = fsdev_llseek,
 	.owner = THIS_MODULE,
 	.open = fsdev_open,
 	.release = fsdev_release,
+	.read_iter = fsdev_dax_read_iter,
+	.write_iter = fsdev_dax_write_iter,
 };
 
 static int fsdev_dax_probe(struct dev_dax *dev_dax)
