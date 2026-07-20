@@ -187,6 +187,17 @@ struct famfs_ioc_get_fmap {
 	};
 };
 
+/**
+ * struct famfs_ioc_daxdev - register an additional backing daxdev
+ * @fd:           an open fd to the devdax (character) device
+ * @daxdev_index: the (cluster-invariant) index this daxdev occupies in extent
+ *                dev_index fields. Index 0 is the mount-time primary daxdev.
+ */
+struct famfs_ioc_daxdev {
+	__u32 fd;
+	__u32 daxdev_index;
+};
+
 #define FAMFSIOC_MAGIC 'u'
 
 /* famfs file ioctl opcodes */
@@ -199,5 +210,6 @@ struct famfs_ioc_get_fmap {
 /* ABI 43 / v2 */
 #define FAMFSIOC_MAP_CREATE_V2 _IOW(FAMFSIOC_MAGIC, 0x54, struct famfs_ioc_fmap)
 #define FAMFSIOC_MAP_GET_V2    _IOR(FAMFSIOC_MAGIC, 0x55, struct famfs_ioc_get_fmap)
+#define FAMFSIOC_DAXDEV_OPEN   _IOW(FAMFSIOC_MAGIC, 0x56, struct famfs_ioc_daxdev)
 
 #endif /* FAMFS_IOCTL_H */

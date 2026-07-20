@@ -13,6 +13,8 @@
 #include <linux/mm.h>
 #include <linux/dax.h>
 #include <linux/iomap.h>
+#include <linux/file.h>
+#include <linux/capability.h>
 
 #include <linux/famfs_ioctl.h>
 #include "famfs_internal.h"
@@ -525,6 +527,56 @@ famfs_prepare_getmap_v2(
 }
 
 /**
+ * famfs_daxdev_open() - FAMFSIOC_DAXDEV_OPEN ioctl handler
+ * @file: any file in the famfs mount (the table is per-superblock)
+ * @arg:  ptr to struct famfs_ioc_daxdev in user space
+ *
+ * Register a devdax device (passed by fd) into the mount's daxdev table at the
+ * caller-specified index, so files whose extents reference that index can be
+ * mapped. Registering exposes raw device memory, so it requires CAP_SYS_RAWIO.
+ */
+static int
+famfs_daxdev_open(struct file *file, void __user *arg)
+{
+	struct super_block *sb = file_inode(file)->i_sb;
+	struct famfs_fs_info *fsi = sb->s_fs_info;
+	struct famfs_ioc_daxdev dd;
+	struct inode *inode;
+	struct file *devfile;
+	dev_t devno;
+	int rc;
+
+	if (!capable(CAP_SYS_RAWIO))
+		return -EPERM;
+
+	if (copy_from_user(&dd, arg, sizeof(dd)))
+		return -EFAULT;
+
+	devfile = fget(dd.fd);
+	if (!devfile)
+		return -EBADF;
+
+	inode = file_inode(devfile);
+	if (!S_ISCHR(inode->i_mode)) {
+		fput(devfile);
+		return -EINVAL;
+	}
+	devno = inode->i_rdev;
+	fput(devfile);
+
+	rc = famfs_devlist_alloc(fsi);
+	if (rc)
+		return rc;
+
+	rc = famfs_install_daxdev(fsi, sb, dd.daxdev_index, devno, NULL);
+	if (rc)
+		pr_err("%s: failed to install daxdev index %u\n",
+		       __func__, dd.daxdev_index);
+
+	return rc;
+}
+
+/**
  * famfs_file_ioctl() - Top-level famfs file ioctl handler
  * @file: the file
  * @cmd:  ioctl opcode
@@ -547,6 +599,10 @@ famfs_file_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 	case FAMFSIOC_MAP_CREATE:
 		rc = famfs_file_init_dax_v1(file, (void *)arg);
+		break;
+
+	case FAMFSIOC_DAXDEV_OPEN:
+		rc = famfs_daxdev_open(file, (void __user *)arg);
 		break;
 
 	case FAMFSIOC_MAP_GET: {
