@@ -687,6 +687,51 @@ famfs_file_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 static ssize_t famfs_file_invalid(struct inode *inode);
 
+/* Check the health of a daxdev table slot */
+static int famfs_dax_err(struct famfs_daxdev *dd)
+{
+	if (!dd->valid) {
+		pr_err("%s: daxdev=%s invalid\n", __func__, dd->name);
+		return -EIO;
+	}
+	if (dd->dax_err) {
+		pr_err("%s: daxdev=%s dax_err\n", __func__, dd->name);
+		return -EIO;
+	}
+	if (dd->error) {
+		pr_err("%s: daxdev=%s memory error\n", __func__, dd->name);
+		return -EHWPOISON;
+	}
+	return 0;
+}
+
+/*
+ * famfs_daxdev_for_index() - resolve an extent's dev_index to a health-checked
+ * dax_device from the table. On success returns the dax_device and sets
+ * *errp = 0; on failure returns NULL and sets *errp (< 0).
+ */
+static struct dax_device *
+famfs_daxdev_for_index(struct famfs_fs_info *fsi, u64 dev_index, int *errp)
+{
+	struct famfs_dax_devlist *devlist = fsi->dax_devlist;
+	struct famfs_daxdev *dd;
+	int rc;
+
+	if (!devlist || dev_index >= devlist->nslots) {
+		pr_err("%s: dev_index %llu out of range\n", __func__, dev_index);
+		*errp = -EIO;
+		return NULL;
+	}
+	dd = &devlist->devlist[dev_index];
+	rc = famfs_dax_err(dd);
+	if (rc) {
+		*errp = rc;
+		return NULL;
+	}
+	*errp = 0;
+	return dd->devp;
+}
+
 static int
 famfs_meta_to_dax_offset_v2(struct inode *inode, struct iomap *iomap,
 			 loff_t file_offset, off_t len, unsigned int flags)
@@ -708,7 +753,6 @@ famfs_meta_to_dax_offset_v2(struct inode *inode, struct iomap *iomap,
 	iomap->offset = file_offset;
 
 	for (i = 0; i < meta->fm_niext; i++) {
-		/* TODO: check devindex too */
 		struct famfs_meta_interleaved_ext *fei = &meta->ie[i];
 		u64 chunk_size = fei->fie_chunk_size;
 		u64 nstrips = fei->fie_nstrips;
@@ -727,12 +771,20 @@ famfs_meta_to_dax_offset_v2(struct inode *inode, struct iomap *iomap,
 			u64 strip_num       = chunk_num % nstrips;
 			u64 chunk_remainder = chunk_size - chunk_offset;
 			u64 strip_offset    = chunk_offset + (stripe_num * chunk_size);
-			u64 strip_dax_ofs   = fei->ie_strips[strip_num].ext_offset;
+			struct famfs_meta_simple_ext *strip = &fei->ie_strips[strip_num];
+			struct dax_device *daxdev;
+			int rc;
 
-			iomap->addr    = strip_dax_ofs + strip_offset;
+			daxdev = famfs_daxdev_for_index(fsi, strip->dev_index, &rc);
+			if (!daxdev) {
+				meta->error = true;
+				return rc;
+			}
+
+			iomap->addr    = strip->ext_offset + strip_offset;
 			iomap->offset  = file_offset;
 			iomap->length  = min_t(loff_t, len, chunk_remainder);
-			iomap->dax_dev = fsi->dax_devp;
+			iomap->dax_dev = daxdev;
 			iomap->type    = IOMAP_MAPPED;
 			iomap->flags   = flags;
 
@@ -742,19 +794,23 @@ famfs_meta_to_dax_offset_v2(struct inode *inode, struct iomap *iomap,
 	}
 
  err_out:
-
-	/* We fell out the end of the extent list.
-	 * Set iomap to zero length in this case, and return 0
-	 * This just means that the r/w is past EOF
+	/*
+	 * We fell out the end of the extent list (access past EOF) or the file
+	 * is invalid. Return -EIO: iomap requires a non-zero-length mapping on
+	 * success (iomap_iter_done() warns on length == 0), so signal the error
+	 * rather than returning a zero-length IOMAP_MAPPED.
 	 */
+	pr_debug("%s: could not resolve file_offset %lld (past EOF?)\n",
+		 __func__, (long long)file_offset);
+
 	iomap->addr    = 0; /* there is no valid dax device offset */
 	iomap->offset  = file_offset; /* file offset */
-	iomap->length  = 0; /* this had better result in no access to dax mem */
+	iomap->length  = 0;
 	iomap->dax_dev = fsi->dax_devp;
 	iomap->type    = IOMAP_MAPPED;
 	iomap->flags   = flags;
 
-	return 0;
+	return -EIO;
 }
 
 /**
@@ -797,7 +853,6 @@ famfs_meta_to_dax_offset(struct inode *inode, struct iomap *iomap,
 	iomap->offset = file_offset;
 
 	for (i = 0; i < meta->fm_nextents; i++) {
-		/* TODO: check devindex too */
 		loff_t dax_ext_offset = meta->se[i].ext_offset;
 		loff_t dax_ext_len    = meta->se[i].ext_len;
 
@@ -812,6 +867,15 @@ famfs_meta_to_dax_offset(struct inode *inode, struct iomap *iomap,
 		 */
 		if (local_offset < dax_ext_len) {
 			loff_t ext_len_remainder = dax_ext_len - local_offset;
+			struct dax_device *daxdev;
+			int rc;
+
+			daxdev = famfs_daxdev_for_index(fsi, meta->se[i].dev_index,
+							&rc);
+			if (!daxdev) {
+				meta->error = true;
+				return rc;
+			}
 
 			/*
 			 * OK, we found the file metadata extent where this
@@ -829,7 +893,7 @@ famfs_meta_to_dax_offset(struct inode *inode, struct iomap *iomap,
 			iomap->addr    = dax_ext_offset + local_offset;
 			iomap->offset  = file_offset;
 			iomap->length  = min_t(loff_t, len, ext_len_remainder);
-			iomap->dax_dev = fsi->dax_devp;
+			iomap->dax_dev = daxdev;
 			iomap->type    = IOMAP_MAPPED;
 			iomap->flags   = flags;
 
