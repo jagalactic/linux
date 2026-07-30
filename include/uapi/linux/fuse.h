@@ -240,6 +240,16 @@
  *  - add FUSE_COPY_FILE_RANGE_64
  *  - add struct fuse_copy_file_range_out
  *  - add FUSE_NOTIFY_PRUNE
+ *
+ *  7.46
+ *  - Add FUSE_DAX_FMAP capability - ability to handle in-kernel fsdax maps
+ *  - Add the following structures for the GET_FMAP message reply components:
+ *    - struct fuse_famfs_simple_ext
+ *    - struct fuse_famfs_iext
+ *    - struct fuse_famfs_fmap_header
+ *  - Add the following enumerated types
+ *    - enum fuse_famfs_file_type
+ *    - enum famfs_ext_type
  */
 
 #ifndef _LINUX_FUSE_H
@@ -448,6 +458,7 @@ struct fuse_file_lock {
  * FUSE_OVER_IO_URING: Indicate that client supports io-uring
  * FUSE_REQUEST_TIMEOUT: kernel supports timing out requests.
  *			 init_out.request_timeout contains the timeout (in secs)
+ * FUSE_DAX_FMAP: kernel supports dev_dax_iomap (aka famfs) fmaps
  */
 #define FUSE_ASYNC_READ		(1 << 0)
 #define FUSE_POSIX_LOCKS	(1 << 1)
@@ -495,6 +506,7 @@ struct fuse_file_lock {
 #define FUSE_ALLOW_IDMAP	(1ULL << 40)
 #define FUSE_OVER_IO_URING	(1ULL << 41)
 #define FUSE_REQUEST_TIMEOUT	(1ULL << 42)
+#define FUSE_DAX_FMAP		(1ULL << 43)
 
 /**
  * CUSE INIT request/reply flags
@@ -663,6 +675,9 @@ enum fuse_opcode {
 	FUSE_TMPFILE		= 51,
 	FUSE_STATX		= 52,
 	FUSE_COPY_FILE_RANGE_64	= 53,
+
+	/* Famfs / devdax opcodes */
+	FUSE_GET_FMAP           = 54,
 
 	/* CUSE specific operations */
 	CUSE_INIT		= 4096,
@@ -1129,7 +1144,10 @@ struct fuse_notify_prune_out {
 struct fuse_backing_map {
 	int32_t		fd;
 	uint32_t	flags;
-	uint64_t	padding;
+	union {
+		uint64_t	padding;
+		uint64_t	daxdev_index;	/* FUSE_DEV_IOC_DAXDEV_OPEN */
+	};
 };
 
 /* Device ioctls: */
@@ -1139,6 +1157,8 @@ struct fuse_backing_map {
 					     struct fuse_backing_map)
 #define FUSE_DEV_IOC_BACKING_CLOSE	_IOW(FUSE_DEV_IOC_MAGIC, 2, uint32_t)
 #define FUSE_DEV_IOC_SYNC_INIT		_IO(FUSE_DEV_IOC_MAGIC, 3)
+#define FUSE_DEV_IOC_DAXDEV_OPEN	_IOW(FUSE_DEV_IOC_MAGIC, 4, \
+					     struct fuse_backing_map)
 
 struct fuse_lseek_in {
 	uint64_t	fh;
@@ -1306,6 +1326,55 @@ struct fuse_uring_cmd_req {
 	/* queue the command is for (queue index) */
 	uint16_t qid;
 	uint8_t padding[6];
+};
+
+/*
+ * GET_FMAP reply header. The extent records that follow it
+ * (fuse_famfs_simple_ext / fuse_famfs_iext) are defined in the following
+ * commit, which parses them.
+ */
+struct fuse_famfs_fmap_header {
+	uint8_t file_type; /* enum fuse_famfs_file_type */
+	uint8_t reserved;
+	uint16_t fmap_version;
+	uint32_t ext_type; /* enum famfs_ext_type */
+	uint32_t nextents;
+	uint32_t fmap_size; /* Inclusive of this header */
+	uint64_t file_size;
+	uint64_t reserved1;
+};
+
+/* Famfs fmap message components */
+
+#define FAMFS_FMAP_VERSION 1
+
+#define FAMFS_FMAP_MAX 32768 /* Largest supported fmap message */
+
+#define FUSE_FAMFS_MAX_STRIPS 32
+
+enum fuse_famfs_file_type {
+	FUSE_FAMFS_FILE_REG,
+	FUSE_FAMFS_FILE_SUPERBLOCK,
+	FUSE_FAMFS_FILE_LOG,
+};
+
+enum famfs_ext_type {
+	FUSE_FAMFS_EXT_SIMPLE = 0,
+	FUSE_FAMFS_EXT_INTERLEAVE = 1,
+};
+
+struct fuse_famfs_simple_ext {
+	uint32_t se_devindex;
+	uint32_t reserved;
+	uint64_t se_offset;
+	uint64_t se_len;
+};
+
+struct fuse_famfs_iext {	/* interleaved (striped) extent */
+	uint32_t ie_nstrips;
+	uint32_t ie_chunk_size;
+	uint64_t ie_nbytes;	/* total bytes mapped by this interleaved extent */
+	uint64_t reserved;
 };
 
 #endif /* _LINUX_FUSE_H */

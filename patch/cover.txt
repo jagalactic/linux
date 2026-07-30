@@ -1,0 +1,92 @@
+Subject: [PATCH v14 00/12] famfs: the Fabric-Attached Memory File System (standalone)
+
+From: John Groves <john@groves.net>
+
+This is v14 of famfs, as a standalone file system. v13 is at [7]; v12 is
+at [9].
+
+Most of this cover letter repeats v12/v13. If you have read it, skip to
+"Changes since v13" below and to the per-patch changelogs under the "---"
+line of each patch (which carry both the v14 and v13 notes). The history
+goes back to 2023, and is briefly covered in the v12 cover.
+
+The most important thing to know about famfs is that it CANNOT be used as a
+general purpose file system. It is for enabling file-based byte-level access
+(including direct mmap) to very large (e.g. 100TB) shared/disaggregated
+memory appliances - which have become available during this long process,
+and which are in need of Linux support.
+
+So famfs cannot be used by anybody who doesn't know why they need it. Making
+famfs standalone means it can't affect users who don't use it. Micron, as
+well as other memory companies, need it, and do not intend to abandon it -
+but imagine if we did: fs/famfs/ should be removed if the memory companies
+can't be bothered to maintain it.
+
+This code base has been in active CI and used globally by early adopters and
+testers of disaggregated memory since 2024. I believe it is solid.
+
+Why standalone (short version)
+
+famfs was introduced at LPC 2023 and LSFMM 2024 [1] as a standalone file
+system, then spent close to a year being ported to fuse/libfuse. After
+maintaining famfs in both forms, I have concluded it makes more sense as a
+standalone file system: fuse adds complexity to famfs (more complex, less
+adaptable, less performant - and famfs files are memory, so access must run
+at memory speed), while famfs adds complexity to fuse that is unlikely to see
+constructive re-use. The full history and argument are in the v12 cover
+letter [9].
+
+Changes since v13
+-----------------
+
+- Reviewed-by tags from Darrick J. Wong and Jeff Layton have been added to
+  the patches they reviewed.
+
+- The MAP_CREATE ioctl (patch 07) is hardened, addressing Richard Cheng's
+  review of v13:
+    * it now requires CAP_SYS_RAWIO, since MAP_CREATE installs caller-supplied
+      device-memory mappings into a file;
+    * fmap validation rejects integer overflow (check_add_overflow() on the
+      extent arithmetic; file_size and each interleaved extent's ie_nbytes are
+      bounded by MAX_LFS_FILESIZE);
+    * interleaved (striped) fmap coverage is validated at ingest -- the sum of
+      the interleaved extents' ie_nbytes must reach file_size, and each strip
+      must physically hold the chunks striped onto it -- so a malformed striped
+      file is rejected with -EINVAL rather than faulting (SIGBUS) on access.
+
+- Rebased onto v7.2.
+
+The full v12 -> v13 change list is in the v13 cover [7] and in the per-patch
+"---" changelogs.
+
+Famfs Overview
+
+Famfs exposes sharable disaggregated memory as a file system. Famfs consumes
+shared memory from [usually shared memory] dax devices, and provides
+memory-mappable files that map directly to the memory - no page cache
+involvement. Famfs differs from conventional file systems in fs-dax mode,
+in that it handles in-memory metadata in a sharable way (which begins with
+never caching dirty shared metadata). So a famfs file system can be mounted
+from multiple nodes, provided they have access to the memory.
+
+The key performance requirement is that famfs must resolve mapping faults
+with minimal overhead. This is achieved by fully caching the file-to-devdax
+metadata for all active files.
+
+Famfs remains the first fs-dax file system that is backed by devdax rather
+than pmem in fs-dax mode (hence the need for the new dax mode).
+
+Famfs depends on the 'fsdev' dax mode which landed in 7.1 - it will only run
+with an fsdev-mode (aka famfs-mode) daxdev as its backing device(s).
+
+The famfs user space can be found at [6].
+
+[1] https://lwn.net/Articles/983105/ (Famfs at LSFMM 2024)
+[2] https://lwn.net/Articles/1020170/ (Famfs at LSFMM 2025, with patch link)
+[3] https://lwn.net/Articles/1068686/ (LWN coverage of the patch thread)
+[4] https://lwn.net/Articles/1082687/ (Famfs at LSFMM 2026)
+[5] https://lore.kernel.org/linux-fsdevel/0100019f7d9fbe81-6cb16662-2522-47ea-a152-fab0ee3d9b35-000000@email.amazonses.com/#b
+[6] https://famfs.org
+[7] FIXME: v13 lore link
+[8] https://lore.kernel.org/linux-cxl/0100019fd478eb93-a6bd48e4-b5f1-4871-93d4-582802956e6c-000000@email.amazonses.com/T/#u (Partial dax patch)
+[9] https://lore.kernel.org/linux-fsdevel/20260806053409.GL3560084@frogsfrogsfrogs/T/#t (v12)
