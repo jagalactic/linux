@@ -7,6 +7,7 @@
 #include "dev.h"
 #include "fuse_i.h"
 
+#include <linux/bitfield.h>
 #include <linux/dax.h>
 #include <linux/pagemap.h>
 #include <linux/slab.h>
@@ -106,6 +107,9 @@ static struct inode *fuse_alloc_inode(struct super_block *sb)
 	if (IS_ENABLED(CONFIG_FUSE_PASSTHROUGH))
 		fuse_inode_backing_set(fi, NULL);
 
+	if (IS_ENABLED(CONFIG_FUSE_FAMFS_DAX))
+		famfs_meta_set(fi, NULL);
+
 	return &fi->inode;
 
 out_free_forget:
@@ -126,6 +130,9 @@ static void fuse_free_inode(struct inode *inode)
 #endif
 	if (IS_ENABLED(CONFIG_FUSE_PASSTHROUGH))
 		fuse_backing_put(fuse_inode_backing(fi));
+
+	if (S_ISREG(inode->i_mode) && fuse_file_famfs(fi))
+		famfs_meta_free(fi);
 
 	kmem_cache_free(fuse_inode_cachep, fi);
 }
@@ -148,7 +155,7 @@ static void fuse_evict_inode(struct inode *inode)
 	/* Will write inode on close/munmap and in all other dirtiers */
 	WARN_ON(inode_state_read_once(inode) & I_DIRTY_INODE);
 
-	if (FUSE_IS_DAX(inode))
+	if (FUSE_IS_VIRTIO_DAX(fi) || fuse_file_famfs(fi))
 		dax_break_layout_final(inode);
 
 	truncate_inode_pages_final(&inode->i_data);
@@ -156,7 +163,7 @@ static void fuse_evict_inode(struct inode *inode)
 	if (inode->i_sb->s_flags & SB_ACTIVE) {
 		struct fuse_conn *fc = get_fuse_conn(inode);
 
-		if (FUSE_IS_DAX(inode))
+		if (FUSE_IS_VIRTIO_DAX(fi))
 			fuse_dax_inode_cleanup(inode);
 		if (fi->nlookup) {
 			fuse_chan_queue_forget(fc->chan, fi->forget, fi->nodeid,
@@ -1014,6 +1021,9 @@ void fuse_conn_put(struct fuse_conn *fc)
 		WARN_ON(atomic_read(&bucket->count) != 1);
 		kfree(bucket);
 	}
+	if (IS_ENABLED(CONFIG_FUSE_FAMFS_DAX))
+		famfs_teardown(fc);
+
 	if (IS_ENABLED(CONFIG_FUSE_PASSTHROUGH))
 		fuse_backing_files_free(fc);
 	call_rcu(&fc->rcu, delayed_release);
@@ -1406,6 +1416,25 @@ static void process_init_reply(struct fuse_args *args, int error)
 
 			if (flags & FUSE_REQUEST_TIMEOUT)
 				timeout = arg->request_timeout;
+
+			if (IS_ENABLED(CONFIG_FUSE_FAMFS_DAX) &&
+			    flags & FUSE_DAX_FMAP) {
+				/* famfs_iomap is only allowed if the fuse
+				 * server has CAP_SYS_RAWIO. This was checked
+				 * in fuse_send_init, and FUSE_DAX_IOMAP was
+				 * set in in_flags if so. Only allow enablement
+				 * if we find it there. This function is
+				 * normally not running in fuse server context,
+				 * so we can't do the capability check here...
+				 */
+				u64 in_flags = FIELD_PREP(GENMASK_ULL(63, 32), ia->in.flags2)
+						| ia->in.flags;
+
+				if (in_flags & FUSE_DAX_FMAP) {
+					famfs_init_devlist_sem(fc);
+					fc->famfs_iomap = 1;
+				}
+			}
 		} else {
 			ra_pages = fc->max_read / PAGE_SIZE;
 			fc->no_lock = 1;
@@ -1473,6 +1502,8 @@ static struct fuse_init_args *fuse_new_init(struct fuse_mount *fm)
 		flags |= FUSE_SUBMOUNTS;
 	if (IS_ENABLED(CONFIG_FUSE_PASSTHROUGH))
 		flags |= FUSE_PASSTHROUGH;
+	if (IS_ENABLED(CONFIG_FUSE_FAMFS_DAX) && capable(CAP_SYS_RAWIO))
+		flags |= FUSE_DAX_FMAP;
 
 	/*
 	 * This is just an information flag for fuse server. No need to check

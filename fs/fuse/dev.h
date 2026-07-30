@@ -87,6 +87,7 @@ int fuse_notify(struct fuse_conn *fc, enum fuse_notify_code code,
 
 int fuse_backing_open(struct fuse_conn *fc, struct fuse_backing_map *map);
 int fuse_backing_close(struct fuse_conn *fc, int backing_id);
+int famfs_daxdev_open(struct fuse_conn *fc, struct fuse_backing_map *map);
 
 int fuse_copy_one(struct fuse_copy_state *cs, void *val, unsigned size);
 int fuse_copy_folio(struct fuse_copy_state *cs, struct folio **foliop,

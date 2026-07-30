@@ -236,6 +236,14 @@ struct fuse_inode {
 	 * be modified, so preserve the blocksize specified by the server.
 	 */
 	u8 cached_i_blkbits;
+
+#if IS_ENABLED(CONFIG_FUSE_FAMFS_DAX)
+	/* Pointer to the file's famfs metadata. Primary content is the
+	 * in-memory version of the fmap - the map from file's offset range
+	 * to DAX memory
+	 */
+	void *famfs_meta;
+#endif
 };
 
 /** FUSE inode state bits */
@@ -711,6 +719,9 @@ struct fuse_conn {
 	/** @sync_init: Is synchronous FUSE_INIT allowed? */
 	unsigned int sync_init:1;
 
+	/** @famfs_iomap: dev_dax_iomap support for famfs */
+	unsigned int famfs_iomap:1;
+
 	/** @max_stack_depth: Maximum stack depth for passthrough backing files */
 	int max_stack_depth;
 
@@ -761,6 +772,11 @@ struct fuse_conn {
 #ifdef CONFIG_FUSE_PASSTHROUGH
 	/** @backing_files_map: IDR for backing files ids */
 	struct idr backing_files_map;
+#endif
+
+#if IS_ENABLED(CONFIG_FUSE_FAMFS_DAX)
+	struct rw_semaphore famfs_devlist_sem;
+	struct famfs_dax_devlist *dax_devlist;
 #endif
 };
 
@@ -1215,7 +1231,11 @@ void fuse_free_conn(struct fuse_conn *fc);
 
 /* dax.c */
 
-#define FUSE_IS_DAX(inode) (IS_ENABLED(CONFIG_FUSE_DAX) && IS_DAX(inode))
+static inline int fuse_file_famfs(struct fuse_inode *fi); /* forward */
+
+#define FUSE_IS_VIRTIO_DAX(fuse_inode) (IS_ENABLED(CONFIG_FUSE_DAX)	\
+					&& IS_DAX(&(fuse_inode)->inode)  \
+					&& !fuse_file_famfs(fuse_inode))
 
 ssize_t fuse_dax_read_iter(struct kiocb *iocb, struct iov_iter *to);
 ssize_t fuse_dax_write_iter(struct kiocb *iocb, struct iov_iter *from);
@@ -1328,5 +1348,108 @@ extern void fuse_sysctl_unregister(void);
 #define fuse_sysctl_register()		(0)
 #define fuse_sysctl_unregister()	do { } while (0)
 #endif /* CONFIG_SYSCTL */
+
+/* famfs.c */
+
+#if IS_ENABLED(CONFIG_FUSE_FAMFS_DAX)
+int famfs_file_init_dax(struct fuse_mount *fm,
+			struct inode *inode, void *fmap_buf,
+			size_t fmap_size);
+ssize_t famfs_fuse_write_iter(struct kiocb *iocb, struct iov_iter *from);
+ssize_t famfs_fuse_read_iter(struct kiocb *iocb, struct iov_iter	*to);
+int famfs_fuse_mmap(struct file *file, struct vm_area_struct *vma);
+void __famfs_meta_free(void *map);
+
+void famfs_teardown(struct fuse_conn *fc);
+
+/* Set fi->famfs_meta = NULL regardless of prior value */
+static inline void famfs_meta_init(struct fuse_inode *fi)
+{
+	fi->famfs_meta = NULL;
+}
+
+/* Set fi->famfs_meta iff the current value is NULL */
+static inline struct fuse_backing *famfs_meta_set(struct fuse_inode *fi,
+						  void *meta)
+{
+	return cmpxchg(&fi->famfs_meta, NULL, meta);
+}
+
+static inline void famfs_meta_free(struct fuse_inode *fi)
+{
+	if (fi->famfs_meta != NULL) {
+		__famfs_meta_free(fi->famfs_meta);
+		WRITE_ONCE(fi->famfs_meta, NULL);
+	}
+}
+
+static inline void famfs_init_devlist_sem(struct fuse_conn *fc)
+{
+	init_rwsem(&fc->famfs_devlist_sem);
+}
+
+static inline int fuse_file_famfs(struct fuse_inode *fi)
+{
+	return (READ_ONCE(fi->famfs_meta) != NULL);
+}
+
+int fuse_get_fmap(struct fuse_mount *fm, struct inode *inode);
+
+int famfs_daxdev_open(struct fuse_conn *fc, struct fuse_backing_map *map);
+
+#else /* !CONFIG_FUSE_FAMFS_DAX */
+
+static inline void famfs_teardown(struct fuse_conn *fc)
+{
+}
+
+static inline ssize_t famfs_fuse_write_iter(struct kiocb *iocb,
+					    struct iov_iter *to)
+{
+	return -ENODEV;
+}
+static inline ssize_t famfs_fuse_read_iter(struct kiocb *iocb,
+					   struct iov_iter *to)
+{
+	return -ENODEV;
+}
+static inline int famfs_fuse_mmap(struct file *file,
+				  struct vm_area_struct *vma)
+{
+	return -ENODEV;
+}
+
+static inline struct fuse_backing *famfs_meta_set(struct fuse_inode *fi,
+						  void *meta)
+{
+	return NULL;
+}
+
+static inline void famfs_meta_free(struct fuse_inode *fi)
+{
+}
+
+static inline void famfs_init_devlist_sem(struct fuse_conn *fc)
+{
+}
+
+static inline int fuse_file_famfs(struct fuse_inode *fi)
+{
+	return 0;
+}
+
+static inline int
+fuse_get_fmap(struct fuse_mount *fm, struct inode *inode)
+{
+	return 0;
+}
+
+static inline int
+famfs_daxdev_open(struct fuse_conn *fc, struct fuse_backing_map *map)
+{
+	return -EOPNOTSUPP;
+}
+
+#endif /* CONFIG_FUSE_FAMFS_DAX */
 
 #endif /* _FS_FUSE_I_H */
