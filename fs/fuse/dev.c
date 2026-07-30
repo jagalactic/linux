@@ -2330,6 +2330,34 @@ static long fuse_dev_ioctl_backing_close(struct file *file, __u32 __user *argp)
 	return fuse_backing_close(fud->chan->conn, backing_id);
 }
 
+static long fuse_dev_ioctl_daxdev_open(struct file *file,
+				       struct fuse_backing_map __user *argp)
+{
+	struct fuse_dev *fud = fuse_get_dev(file);
+	struct fuse_backing_map map;
+
+	if (IS_ERR(fud))
+		return PTR_ERR(fud);
+
+	if (!IS_ENABLED(CONFIG_FUSE_FAMFS_DAX))
+		return -EOPNOTSUPP;
+
+	/*
+	 * The famfs-mode gate (fc->famfs_iomap) lives in famfs_daxdev_open(),
+	 * which has the full fuse_conn definition. Here, re-check CAP_SYS_RAWIO
+	 * against the task performing the registration: famfs mode being enabled
+	 * only attests that the session founder held it at FUSE_INIT, and the
+	 * fuse device fd may have been passed to a less-privileged process.
+	 */
+	if (!capable(CAP_SYS_RAWIO))
+		return -EPERM;
+
+	if (copy_from_user(&map, argp, sizeof(map)))
+		return -EFAULT;
+
+	return famfs_daxdev_open(fud->chan->conn, &map);
+}
+
 static long fuse_dev_ioctl_sync_init(struct file *file)
 {
 	struct fuse_dev *fud = fuse_file_to_fud(file);
@@ -2358,6 +2386,9 @@ static long fuse_dev_ioctl(struct file *file, unsigned int cmd,
 
 	case FUSE_DEV_IOC_SYNC_INIT:
 		return fuse_dev_ioctl_sync_init(file);
+
+	case FUSE_DEV_IOC_DAXDEV_OPEN:
+		return fuse_dev_ioctl_daxdev_open(file, argp);
 
 	default:
 		return -ENOTTY;
