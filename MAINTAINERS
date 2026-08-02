@@ -9910,6 +9910,7 @@ M:	John Groves <John@Groves.net>
 L:	linux-fsdevel@vger.kernel.org
 L:	linux-cxl@vger.kernel.org
 S:	Supported
+F:	Documentation/filesystems/famfs.rst
 F:	fs/famfs/
 
 FANOTIFY
