@@ -91,7 +91,6 @@ Documentation for filesystem implementations.
    ext3
    ext4/index
    f2fs
-   famfs
    gfs2/index
    hfs
    hfsplus
