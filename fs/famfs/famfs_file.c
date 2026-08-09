@@ -52,9 +52,9 @@ famfs_check_ext_alignment(struct famfs_meta_simple_ext *se)
 {
 	int errs = 0;
 
-	if (!IS_ALIGNED(se->ext_offset, PMD_SIZE))
+	if (!IS_ALIGNED(se->ext_offset, PAGE_SIZE))
 		errs++;
-	if (!IS_ALIGNED(se->ext_len, PMD_SIZE))
+	if (!IS_ALIGNED(se->ext_len, PAGE_SIZE))
 		errs++;
 
 	return errs;
@@ -189,8 +189,9 @@ famfs_file_init_dax(struct file *file, void __user *arg)
 				goto out;
 			}
 
-			if (ie_in->ie_chunk_size == 0 ||
-			    !IS_ALIGNED(ie_in->ie_chunk_size, PMD_SIZE)) {
+			/* chunk_size must be exactly one supported alloc unit */
+			if (ie_in->ie_chunk_size != PAGE_SIZE &&
+			    ie_in->ie_chunk_size != PMD_SIZE) {
 				rc = -EINVAL;
 				goto out;
 			}
