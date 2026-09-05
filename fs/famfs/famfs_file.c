@@ -117,6 +117,9 @@ famfs_file_init_dax(struct file *file, void __user *arg)
 		return -EINVAL;
 	if (fmh.file_size > MAX_LFS_FILESIZE)
 		return -EINVAL;
+	/* Reserved header fields must be zero so they stay available */
+	if (fmh.reserved || fmh.reserved1)
+		return -EINVAL;
 
 	fmap_buf = kvmalloc(fmh.fmap_size, GFP_KERNEL);
 	if (!fmap_buf)
@@ -158,6 +161,10 @@ famfs_file_init_dax(struct file *file, void __user *arg)
 		}
 
 		for (i = 0; i < fmh.nextents; i++) {
+			if (se_in[i].reserved) {
+				rc = -EINVAL;
+				goto out;
+			}
 			meta->se[i].dev_index  = se_in[i].se_devindex;
 			meta->se[i].ext_offset = se_in[i].se_offset;
 			meta->se[i].ext_len    = se_in[i].se_len;
@@ -205,6 +212,10 @@ famfs_file_init_dax(struct file *file, void __user *arg)
 				goto out;
 			}
 
+			if (ie_in->reserved) {
+				rc = -EINVAL;
+				goto out;
+			}
 			/* chunk_size must be exactly one supported alloc unit */
 			if (ie_in->ie_chunk_size != PAGE_SIZE &&
 			    ie_in->ie_chunk_size != PMD_SIZE) {
@@ -252,6 +263,10 @@ famfs_file_init_dax(struct file *file, void __user *arg)
 				struct famfs_meta_simple_ext *so =
 					&meta->ie[i].ie_strips[j];
 
+				if (sie_in[j].reserved) {
+					rc = -EINVAL;
+					goto out;
+				}
 				so->dev_index  = sie_in[j].se_devindex;
 				so->ext_offset = sie_in[j].se_offset;
 				so->ext_len    = sie_in[j].se_len;
@@ -336,9 +351,16 @@ famfs_file_init_dax(struct file *file, void __user *arg)
 	if (inode->i_private) {
 		rc = -EEXIST; /* file already has famfs metadata */
 	} else {
-		inode->i_private = meta;
 		i_size_write(inode, meta->file_size);
 		inode->i_flags |= S_DAX;
+		/*
+		 * Publish last: a reader that observes i_private via
+		 * smp_load_acquire() (famfs_file_invalid, which can run from
+		 * mmap without i_rwsem) is then guaranteed to also see the
+		 * i_size and S_DAX stores above -- otherwise it could latch
+		 * meta->error on a stale i_size and brick the mapping.
+		 */
+		smp_store_release(&inode->i_private, meta);
 		meta = NULL; /* owned by the inode now */
 		rc = 0;
 	}
@@ -462,7 +484,7 @@ const struct vm_operations_struct famfs_file_vm_ops = {
 static ssize_t
 famfs_file_invalid(struct inode *inode)
 {
-	struct famfs_file_meta *meta = inode->i_private;
+	struct famfs_file_meta *meta = smp_load_acquire(&inode->i_private);
 	size_t i_size = i_size_read(inode);
 
 	if (!meta) {
