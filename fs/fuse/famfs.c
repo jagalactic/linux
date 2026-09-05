@@ -780,7 +780,7 @@ static int famfs_file_bad(struct inode *inode);
 
 static int famfs_dax_err(struct famfs_daxdev *dd)
 {
-	if (!dd->valid) {
+	if (!smp_load_acquire(&dd->valid)) {
 		pr_err("%s: daxdev=%s invalid\n",
 		       __func__, dd->name);
 		return -EIO;
