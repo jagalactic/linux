@@ -419,7 +419,7 @@ static ssize_t famfs_file_invalid(struct inode *inode);
 static int
 famfs_dax_err(struct famfs_daxdev *dd)
 {
-	if (!dd->valid) {
+	if (!smp_load_acquire(&dd->valid)) {
 		pr_debug("%s: daxdev=%s invalid\n", __func__, dd->name);
 		return -EIO;
 	}
@@ -470,7 +470,7 @@ famfs_meta_to_dax_offset_interleaved(
 	loff_t len)
 {
 	struct famfs_fs_info  *fsi = inode->i_sb->s_fs_info;
-	struct famfs_file_meta *meta = inode->i_private;
+	struct famfs_file_meta *meta = smp_load_acquire(&inode->i_private);
 	loff_t local_offset = file_offset;
 	int rc;
 	int i;
@@ -585,7 +585,7 @@ famfs_meta_to_dax_offset(
 	loff_t len)
 {
 	struct famfs_fs_info  *fsi = inode->i_sb->s_fs_info;
-	struct famfs_file_meta *meta = inode->i_private;
+	struct famfs_file_meta *meta = smp_load_acquire(&inode->i_private);
 	loff_t local_offset = file_offset;
 	int rc;
 	int i;
@@ -608,8 +608,8 @@ famfs_meta_to_dax_offset(
 
 		if ((dax_ext_offset == 0) &&
 		    (meta->file_type != FAMFS_SUPERBLOCK))
-			pr_warn("%s: zero offset on non-superblock file!!\n",
-				__func__);
+			pr_warn_ratelimited("%s: zero offset on non-superblock file!!\n",
+					    __func__);
 
 		/* local_offset is the offset minus the size of extents skipped
 		 * so far; If local_offset < dax_ext_len, the data of interest
