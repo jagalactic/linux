@@ -25,8 +25,7 @@ static ssize_t
 famfs_file_invalid(struct inode *inode)
 {
 	if (!IS_DAX(inode)) {
-		pr_debug("%s: inode %llx IS_DAX is false\n",
-			 __func__, (u64)inode);
+		pr_debug("%s: inode %p IS_DAX is false\n", __func__, inode);
 		return -ENXIO;
 	}
 	return 0;
@@ -113,7 +112,11 @@ famfs_dax_write_iter(struct kiocb *iocb, struct iov_iter *from)
 		return rc;
 	}
 
-	kiocb_modified(iocb); /* mtime/ctime + strip set[e]uid */
+	rc = kiocb_modified(iocb); /* mtime/ctime + strip set[e]uid */
+	if (rc) {
+		inode_unlock(inode);
+		return rc;
+	}
 
 	rc = dax_iomap_rw(iocb, from, NULL /*&famfs_iomap_ops*/);
 	inode_unlock(inode);
