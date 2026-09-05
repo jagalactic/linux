@@ -116,6 +116,12 @@ famfs_fuse_meta_alloc(
 		return -EINVAL;
 	}
 
+	/* Reserved header fields must be zero so they stay available */
+	if (fmh->reserved || fmh->reserved1) {
+		pr_err("%s: non-zero reserved header field\n", __func__);
+		return -EINVAL;
+	}
+
 	/*
 	 * No separate upper cap on nextents: the reply buffer bounds it. The
 	 * extent list is rejected below if it does not fit in fmap_buf_size, and
@@ -155,6 +161,11 @@ famfs_fuse_meta_alloc(
 			return -ENOMEM;
 
 		for (i = 0; i < fmh->nextents; i++) {
+			if (se_in[i].reserved) {
+				pr_err("%s: non-zero reserved extent field\n",
+				       __func__);
+				return -EINVAL;
+			}
 			meta->se[i].dev_index  = se_in[i].se_devindex;
 			meta->se[i].ext_offset = se_in[i].se_offset;
 			meta->se[i].ext_len    = se_in[i].se_len;
@@ -227,6 +238,11 @@ famfs_fuse_meta_alloc(
 				return -EINVAL;
 			}
 
+			if (ie_in->reserved) {
+				pr_err("%s: non-zero reserved iext field\n",
+				       __func__);
+				return -EINVAL;
+			}
 			/* chunk_size must be exactly one supported alloc unit */
 			if (ie_in->ie_chunk_size != PAGE_SIZE &&
 			    ie_in->ie_chunk_size != PMD_SIZE) {
@@ -276,6 +292,11 @@ famfs_fuse_meta_alloc(
 				struct famfs_meta_simple_ext *so =
 					&meta->ie[i].ie_strips[j];
 
+				if (sie_in[j].reserved) {
+					pr_err("%s: non-zero reserved strip field\n",
+					       __func__);
+					return -EINVAL;
+				}
 				so->dev_index  = sie_in[j].se_devindex;
 				so->ext_offset = sie_in[j].se_offset;
 				so->ext_len    = sie_in[j].se_len;
