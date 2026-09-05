@@ -200,8 +200,12 @@ static int famfs_install_daxdev(struct fuse_conn *fc, u64 index, dev_t devno,
 			}
 		}
 
-		wmb(); /* All other fields must be visible before valid */
-		daxdev->valid = 1;
+		/*
+		 * Publish the slot: all other daxdev fields must be visible
+		 * before valid. Pairs with smp_load_acquire(&dd->valid) in the
+		 * lockless reader (famfs_dax_err).
+		 */
+		smp_store_release(&daxdev->valid, 1);
 	}
 
 	return 0;
