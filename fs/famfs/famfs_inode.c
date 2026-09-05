@@ -221,8 +221,12 @@ famfs_install_daxdev(
 			}
 		}
 
-		wmb(); /* All other fields must be visible before valid */
-		daxdev->valid = 1;
+		/*
+		 * Publish the slot: all other daxdev fields must be visible
+		 * before valid. Pairs with smp_load_acquire(&dd->valid) in the
+		 * lockless readers (famfs_dax_err/famfs_daxdev_from_index).
+		 */
+		smp_store_release(&daxdev->valid, 1);
 	}
 
 	return 0;
