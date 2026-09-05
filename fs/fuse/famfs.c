@@ -1126,8 +1126,7 @@ famfs_file_bad(struct inode *inode)
 		return -ENXIO;
 	}
 	if (!IS_DAX(inode)) {
-		pr_debug("%s: inode %llx IS_DAX is false\n",
-			 __func__, (u64)inode);
+		pr_debug("%s: inode %p IS_DAX is false\n", __func__, inode);
 		return -ENXIO;
 	}
 	return 0;
